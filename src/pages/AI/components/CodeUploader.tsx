@@ -5,6 +5,7 @@ import { Column, Row } from "../../../components/Layout"
 import { Text } from "../../../components/Text"
 import { Title } from "../../../components/Title"
 import { FaCloudUploadAlt, FaSpinner, FaExclamationTriangle, FaCheckCircle, FaInfoCircle } from "react-icons/fa"
+import { getAPIURL } from "../../../utils/api"
 
 import styles from "./CodeUploader.module.scss"
 
@@ -107,7 +108,8 @@ export const CodeUploader: React.FC = () => {
     })
 
     try {
-      const response = await fetch("http://localhost:5001/analyze", {
+      const apiUrl = await getAPIURL()
+      const response = await fetch(`${apiUrl}/analyze`, {
         method: "POST",
         body: formData,
       })
