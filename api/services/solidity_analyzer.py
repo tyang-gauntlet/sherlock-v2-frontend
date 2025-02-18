@@ -1,6 +1,6 @@
 import os
 from typing import List, Dict, Any
-from solidity_parser import parser
+from slither.slither import Slither
 
 
 def analyze_solidity_files(file_paths: List[str]) -> Dict[str, Any]:
@@ -29,31 +29,136 @@ def analyze_solidity_files(file_paths: List[str]) -> Dict[str, Any]:
             continue
 
         try:
-            with open(file_path, 'r', encoding='utf-8') as file:
-                source_code = file.read()
+            # Initialize Slither
+            slither = Slither(file_path)
 
-            # Parse Solidity code
-            parsed_data = parser.parse(source_code)
+            file_analysis = {
+                'file_name': os.path.basename(file_path),
+                'contracts': [],
+                'total_functions': 0,
+                'vulnerabilities': [],
+                'suggestions': [],
+                'compilation_successful': True
+            }
 
-            file_analysis = analyze_contract(parsed_data, source_code)
-            file_analysis['file_name'] = os.path.basename(file_path)
+            # Analyze each contract
+            for contract in slither.contracts:
+                contract_analysis = {
+                    'name': contract.name,
+                    'functions': [],
+                    'state_variables': [],
+                    'vulnerabilities': [],
+                    'suggestions': []
+                }
+
+                # Analyze functions
+                for function in contract.functions:
+                    function_info = {
+                        'name': function.name,
+                        'visibility': str(function.visibility),
+                        'modifiers': [m.name for m in function.modifiers],
+                        'state_variables_written': [v.name for v in function.state_variables_written]
+                    }
+
+                    # Check function-specific vulnerabilities
+                    if function.payable:
+                        contract_analysis['vulnerabilities'].append({
+                            'type': 'PAYABLE_FUNCTION',
+                            'severity': 'MEDIUM',
+                            'description': f'Function {function.name} is payable - ensure proper access controls'
+                        })
+
+                    for node in function.nodes:
+                        for ir in node.irs:
+                            ir_str = str(ir).lower()
+                            if "selfdestruct" in ir_str:
+                                contract_analysis['vulnerabilities'].append({
+                                    'type': 'SELF_DESTRUCT',
+                                    'severity': 'HIGH',
+                                    'description': f'Function {function.name} contains selfdestruct - high risk'
+                                })
+                            if "delegatecall" in ir_str:
+                                contract_analysis['vulnerabilities'].append({
+                                    'type': 'DELEGATECALL',
+                                    'severity': 'HIGH',
+                                    'description': f'Function {function.name} uses delegatecall - potential security risk'
+                                })
+                            if "block.timestamp" in ir_str:
+                                contract_analysis['vulnerabilities'].append({
+                                    'type': 'TIMESTAMP_DEPENDENCY',
+                                    'severity': 'MEDIUM',
+                                    'description': f'Function {function.name} uses block.timestamp - potential manipulation'
+                                })
+
+                    contract_analysis['functions'].append(function_info)
+                    file_analysis['total_functions'] += 1
+
+                # Analyze state variables
+                for var in contract.state_variables:
+                    var_info = {
+                        'name': var.name,
+                        'type': str(var.type),
+                        'visibility': str(var.visibility)
+                    }
+                    contract_analysis['state_variables'].append(var_info)
+
+                # Run Slither detectors
+                for detector in slither.detectors:
+                    results = detector.detect()
+                    if results:
+                        for result in results:
+                            vulnerability = {
+                                'type': detector.__class__.__name__,
+                                'severity': str(result.get('impact', 'MEDIUM')),
+                                'description': result.get('description', 'No description provided')
+                            }
+                            contract_analysis['vulnerabilities'].append(
+                                vulnerability)
+
+                # Add suggestions based on analysis
+                if not any(f.get('modifiers', []) for f in contract_analysis['functions']):
+                    contract_analysis['suggestions'].append({
+                        'type': 'MISSING_MODIFIERS',
+                        'severity': 'MEDIUM',
+                        'description': 'Consider using modifiers for access control'
+                    })
+
+                if len([v for v in contract_analysis['state_variables'] if v['visibility'] == 'public']) > 3:
+                    contract_analysis['suggestions'].append({
+                        'type': 'EXCESSIVE_PUBLIC_VARS',
+                        'severity': 'LOW',
+                        'description': 'Consider reducing the number of public state variables'
+                    })
+
+                file_analysis['contracts'].append(contract_analysis)
+                file_analysis['vulnerabilities'].extend(
+                    contract_analysis['vulnerabilities'])
+                file_analysis['suggestions'].extend(
+                    contract_analysis['suggestions'])
+
+            # Set risk level based on vulnerabilities
+            if any(v['severity'] == 'HIGH' for v in file_analysis['vulnerabilities']):
+                file_analysis['risk_level'] = 'HIGH'
+                risk_levels.append('HIGH')
+            elif any(v['severity'] == 'MEDIUM' for v in file_analysis['vulnerabilities']):
+                file_analysis['risk_level'] = 'MEDIUM'
+                risk_levels.append('MEDIUM')
+            else:
+                file_analysis['risk_level'] = 'LOW'
+                risk_levels.append('LOW')
 
             results['files'].append(file_analysis)
-            results['total_contracts'] += len(
-                file_analysis.get('contracts', []))
-            results['total_functions'] += file_analysis.get(
-                'total_functions', 0)
-            results['vulnerabilities'].extend(
-                file_analysis.get('vulnerabilities', []))
-            results['suggestions'].extend(file_analysis.get('suggestions', []))
-
-            risk_levels.append(file_analysis.get('risk_level', 'LOW'))
+            results['total_contracts'] += len(file_analysis['contracts'])
+            results['total_functions'] += file_analysis['total_functions']
+            results['vulnerabilities'].extend(file_analysis['vulnerabilities'])
+            results['suggestions'].extend(file_analysis['suggestions'])
 
         except Exception as e:
             results['files'].append({
                 'file_name': os.path.basename(file_path),
                 'error': str(e),
-                'risk_level': 'UNKNOWN'
+                'risk_level': 'UNKNOWN',
+                'compilation_successful': False
             })
             risk_levels.append('UNKNOWN')
 
@@ -68,145 +173,3 @@ def analyze_solidity_files(file_paths: List[str]) -> Dict[str, Any]:
         results['overall_risk_level'] = 'UNKNOWN'
 
     return results
-
-
-def analyze_contract(parsed_data: Dict[str, Any], source_code: str) -> Dict[str, Any]:
-    """
-    Analyze a single Solidity contract.
-
-    Args:
-        parsed_data (Dict[str, Any]): Parsed Solidity AST
-        source_code (str): Original source code
-
-    Returns:
-        Dict[str, Any]: Analysis results for the contract
-    """
-    results = {
-        'contracts': [],
-        'total_functions': 0,
-        'vulnerabilities': [],
-        'suggestions': [],
-        'risk_level': 'LOW'
-    }
-
-    # Extract contracts
-    contracts = [node for node in parsed_data['children']
-                 if node['type'] == 'ContractDefinition']
-
-    for contract in contracts:
-        contract_analysis = {
-            'name': contract['name'],
-            'functions': [],
-            'state_variables': [],
-            'vulnerabilities': [],
-            'suggestions': []
-        }
-
-        # Analyze functions
-        functions = [node for node in contract['subNodes']
-                     if node['type'] == 'FunctionDefinition']
-        for func in functions:
-            function_analysis = analyze_function(func)
-            contract_analysis['functions'].append(function_analysis)
-            results['total_functions'] += 1
-
-        # Analyze state variables
-        state_vars = [node for node in contract['subNodes']
-                      if node['type'] == 'StateVariableDeclaration']
-        for var in state_vars:
-            var_analysis = analyze_state_variable(var)
-            contract_analysis['state_variables'].append(var_analysis)
-
-        # Check for common vulnerabilities
-        vulnerabilities = check_vulnerabilities(contract, source_code)
-        contract_analysis['vulnerabilities'].extend(vulnerabilities)
-        results['vulnerabilities'].extend(vulnerabilities)
-
-        # Add suggestions
-        suggestions = generate_suggestions(contract_analysis)
-        contract_analysis['suggestions'].extend(suggestions)
-        results['suggestions'].extend(suggestions)
-
-        results['contracts'].append(contract_analysis)
-
-    # Update risk level based on vulnerabilities
-    if any(v['severity'] == 'HIGH' for v in results['vulnerabilities']):
-        results['risk_level'] = 'HIGH'
-    elif any(v['severity'] == 'MEDIUM' for v in results['vulnerabilities']):
-        results['risk_level'] = 'MEDIUM'
-
-    return results
-
-
-def analyze_function(func: Dict[str, Any]) -> Dict[str, Any]:
-    """Analyze a single function"""
-    return {
-        'name': func.get('name', 'unnamed'),
-        'visibility': func.get('visibility', 'public'),
-        'modifiers': [mod['name'] for mod in func.get('modifiers', [])],
-        'parameters': [{'name': param['name'], 'type': param['typeName']['name']}
-                       for param in func.get('parameters', [])]
-    }
-
-
-def analyze_state_variable(var: Dict[str, Any]) -> Dict[str, Any]:
-    """Analyze a state variable"""
-    return {
-        'name': var['variables'][0]['name'],
-        'type': var['variables'][0]['typeName']['name'],
-        'visibility': var.get('visibility', 'internal')
-    }
-
-
-def check_vulnerabilities(contract: Dict[str, Any], source_code: str) -> List[Dict[str, Any]]:
-    """Check for common smart contract vulnerabilities"""
-    vulnerabilities = []
-
-    # Check for reentrancy
-    if 'call.value' in source_code:
-        vulnerabilities.append({
-            'type': 'REENTRANCY',
-            'severity': 'HIGH',
-            'description': 'Potential reentrancy vulnerability detected'
-        })
-
-    # Check for unchecked external calls
-    if '.call(' in source_code and 'require(' not in source_code:
-        vulnerabilities.append({
-            'type': 'UNCHECKED_EXTERNAL_CALL',
-            'severity': 'MEDIUM',
-            'description': 'Unchecked external call detected'
-        })
-
-    # Add more vulnerability checks as needed
-
-    return vulnerabilities
-
-
-def generate_suggestions(contract_analysis: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Generate code improvement suggestions"""
-    suggestions = []
-
-    # Check function visibility
-    public_functions = [f for f in contract_analysis['functions']
-                        if f['visibility'] == 'public']
-    if len(public_functions) > 5:
-        suggestions.append({
-            'type': 'VISIBILITY',
-            'severity': 'LOW',
-            'description': 'Consider reducing the number of public functions'
-        })
-
-    # Check state variable visibility
-    public_vars = [v for v in contract_analysis['state_variables']
-                   if v['visibility'] == 'public']
-    if len(public_vars) > 3:
-        suggestions.append({
-            'type': 'STATE_VISIBILITY',
-            'severity': 'LOW',
-            'description': 'Consider reducing the number of public state variables'
-        })
-
-    # Add more suggestions as needed
-
-    return suggestions

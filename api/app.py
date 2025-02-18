@@ -41,38 +41,61 @@ def analyze_code():
         return jsonify({'error': 'No files selected'}), 400
 
     saved_files = []
-    for file in files:
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)
-            saved_files.append(filepath)
-
-    if not saved_files:
-        return jsonify({'error': 'No valid files uploaded'}), 400
+    file_details = []
 
     try:
-        # Analyze the uploaded files
-        analysis_results = analyze_solidity_files(saved_files)
+        for file in files:
+            if file and allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                file.save(filepath)
+                saved_files.append(filepath)
+                file_details.append({
+                    'name': filename,
+                    'path': filepath,
+                    'size': os.path.getsize(filepath)
+                })
 
+        if not saved_files:
+            return jsonify({'error': 'No valid files uploaded'}), 400
+
+        try:
+            # Perform the analysis
+            analysis_results = analyze_solidity_files(saved_files)
+
+            # Add file metadata to results
+            for file_detail in file_details:
+                matching_result = next(
+                    (r for r in analysis_results['files'] if r['file_name'] == os.path.basename(
+                        file_detail['path'])),
+                    None
+                )
+                if matching_result:
+                    matching_result['file_size'] = file_detail['size']
+
+            return jsonify(analysis_results), 200
+
+        except Exception as analysis_error:
+            return jsonify({
+                'error': f'Analysis failed: {str(analysis_error)}',
+                'files': file_details,
+                'status': 'error'
+            }), 500
+
+    except Exception as e:
+        return jsonify({
+            'error': f'Server error: {str(e)}',
+            'status': 'error'
+        }), 500
+
+    finally:
         # Clean up uploaded files
         for filepath in saved_files:
             try:
-                os.remove(filepath)
-            except Exception as e:
-                print(f"Error removing file {filepath}: {str(e)}")
-
-        return jsonify(analysis_results), 200
-
-    except Exception as e:
-        # Clean up uploaded files in case of error
-        for filepath in saved_files:
-            try:
-                os.remove(filepath)
+                if os.path.exists(filepath):
+                    os.remove(filepath)
             except Exception as cleanup_error:
                 print(f"Error removing file {filepath}: {str(cleanup_error)}")
-
-        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':
