@@ -32,6 +32,7 @@ import { AuditScope } from "./pages/AuditScope/AuditScope"
 import { InitialPayment } from "./pages/protocol_dashboard/InitialPayment/InitialPayment"
 import { FinalPayment } from "./pages/protocol_dashboard/FinalPayment/FinalPayment"
 import { ContextQuestions } from "./pages/protocol_dashboard/ContextQuestions/ContextQuestions"
+import { AIPage } from "./pages/AI/AI"
 
 function App() {
   const { address: connectedAddress } = useAccount()
@@ -86,6 +87,7 @@ function App() {
           <Route path={contestsRoutes.Contests} element={<ContestsPage />} />
           <Route path={contestsRoutes.ContestDetails} element={<ContestDetails />} />
           <Route path={contestsRoutes.Leaderboard} element={<Leaderboard />} />
+          <Route path={contestsRoutes.AI} element={<AIPage />} />
 
           <Route
             path="scoreboard"

@@ -1,0 +1,66 @@
+@import "../../../styles/variables";
+
+.dropzone {
+  border: 1px solid;
+  border-image-slice: 1;
+  border-image-source: linear-gradient(136.33deg, rgba(135, 22, 232, 0.28) 7.74%, rgba(254, 110, 153, 0) 98.49%);
+  padding: $spacing-xl;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+
+  &:hover,
+  &.dragging {
+    border-image-source: linear-gradient(136.33deg, rgba(135, 22, 232, 0.5) 7.74%, rgba(254, 110, 153, 0.2) 98.49%);
+  }
+}
+
+.fileInput {
+  opacity: 0;
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  top: 0;
+  left: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinner {
+  animation: spin 1s linear infinite;
+  margin-right: $spacing-s;
+}
+
+.error {
+  color: $color-error;
+  background-color: rgba($color-error, 0.1);
+  padding: $spacing-m;
+  border-radius: $border-radius;
+}
+
+.highSeverity {
+  color: $color-error;
+}
+
+.mediumSeverity {
+  color: $color-warning;
+}
+
+.lowSeverity {
+  color: $color-info;
+}
+
+.suggestion {
+  background-color: rgba($color-info, 0.1);
+  padding: $spacing-m;
+  border-radius: $border-radius;
+}

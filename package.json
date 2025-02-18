@@ -24,7 +24,6 @@
     "html-react-parser": "^3.0.4",
     "js-cookie": "^3.0.1",
     "luxon": "^2.3.0",
-    "node-sass": "^7.0.1",
     "react": "^18.1.0",
     "react-dom": "^18.1.0",
     "react-icons": "^4.3.1",
@@ -33,6 +32,7 @@
     "react-scripts": "5.0.0",
     "react-tweet-card": "^0.2.3",
     "recharts": "^2.1.9",
+    "sass": "^1.85.0",
     "showdown": "^2.1.0",
     "siwe": "^2.0.5",
     "typescript": "^4.9.4",
@@ -45,7 +45,13 @@
     "build": "REACT_APP_VERSION=`git rev-parse --short HEAD` react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "prepare": "husky install"
+    "prepare": "husky install",
+    "docker:api:build": "docker compose build solidity-analyzer",
+    "docker:api:start": "docker compose up -d solidity-analyzer",
+    "docker:api:stop": "docker compose down",
+    "docker:api:logs": "docker compose logs -f solidity-analyzer",
+    "docker:api:restart": "docker compose restart solidity-analyzer",
+    "docker:api:rebuild": "docker compose up -d --build solidity-analyzer"
   },
   "husky": {
     "hooks": {

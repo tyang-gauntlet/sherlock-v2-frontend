@@ -7,6 +7,17 @@ $text-color: #fff;
 $primary-purple: #8716e8;
 $alternate-pink: #fe6e99;
 
+// Colors
+$color-primary: $primary-purple;
+$color-border: rgba(255, 255, 255, 0.1);
+$color-error: #ff4d4f;
+$color-warning: #faad14;
+$color-info: #1890ff;
+$color-background: $background-color;
+
+// Layout
+$content-width: 1200px;
+
 ///
 /// SPACING
 ///
@@ -15,3 +26,6 @@ $spacing-s: 0.75rem;
 $spacing-m: 1rem;
 $spacing-l: 1.25rem;
 $spacing-xl: 1.5rem;
+
+// Border
+$border-radius: 4px;

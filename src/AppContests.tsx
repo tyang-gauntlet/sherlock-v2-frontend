@@ -35,6 +35,11 @@ export const AppContests = () => {
     })
   }
 
+  navigationLinks.push({
+    title: "AI",
+    route: contestsRoutes.AI,
+  })
+
   if (isAuditor) {
     navigationLinks.push({
       title: "PROFILE",

@@ -1,0 +1,39 @@
+@import "../../styles/variables";
+
+.featureCard {
+  padding: $spacing-l;
+  border: 1px solid;
+  border-image-slice: 1;
+  border-image-source: linear-gradient(136.33deg, rgba(135, 22, 232, 0.28) 7.74%, rgba(254, 110, 153, 0) 98.49%);
+  transition: all 0.3s ease;
+  background: linear-gradient(170deg, rgba($background-color, 0.4) 0%, rgba($background-color, 0.1) 100%);
+  backdrop-filter: blur(10px);
+
+  &:hover {
+    transform: translateY(-2px);
+    border-image-source: linear-gradient(136.33deg, rgba(135, 22, 232, 0.5) 7.74%, rgba(254, 110, 153, 0.3) 98.49%);
+    background: linear-gradient(170deg, rgba($background-color, 0.5) 0%, rgba($background-color, 0.2) 100%);
+  }
+}
+
+.icon {
+  font-size: 24px;
+  background: linear-gradient(45deg, $primary-purple, $alternate-pink);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-right: $spacing-s;
+}
+
+.heroText {
+  background: linear-gradient(45deg, $text-color, rgba($alternate-pink, 0.8));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: $spacing-m;
+}
+
+.featuresGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: $spacing-l;
+  width: 100%;
+}

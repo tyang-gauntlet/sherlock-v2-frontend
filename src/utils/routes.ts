@@ -21,6 +21,7 @@ export const contestsRoutes = {
   ContestDetails: "contests/:contestId",
   Leaderboard: "leaderboard",
   Profile: "profile",
+  AI: "ai",
 } as const
 
 export const adminRoutes = {
