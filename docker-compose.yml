@@ -7,14 +7,11 @@ services:
       dockerfile: Dockerfile
     container_name: solidity-analyzer
     ports:
-      - "5001:5000"
+      - "${API_PORT:-5001}:5000"
     volumes:
       - ./api:/app
       - /app/node_modules
     environment:
-      - FLASK_APP=app.py
-      - FLASK_ENV=production
-      - FUZZ_API_KEY=${FUZZ_API_KEY}
-    env_file:
-      - .env
+      - FLASK_ENV=development
+      - PORT=5000
     restart: unless-stopped

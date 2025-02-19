@@ -11,14 +11,6 @@ RUN apt-get update && \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Foundry
-RUN curl -L https://foundry.paradigm.xyz | bash && \
-    /root/.foundry/bin/foundryup
-
-# Install Diligence Fuzzing CLI
-RUN curl -L https://fuzzing.diligence.tools/download/fuzz-cli-linux-amd64 -o /usr/local/bin/fuzz && \
-    chmod +x /usr/local/bin/fuzz
-
 # Set working directory
 WORKDIR /app
 
@@ -46,7 +38,6 @@ ENV FLASK_APP=app.py
 ENV FLASK_ENV=production
 ENV PYTHONUNBUFFERED=1
 ENV SOLC_VERSION=0.8.24
-ENV PATH="/root/.foundry/bin:${PATH}"
 
 # Expose port
 EXPOSE 5000
