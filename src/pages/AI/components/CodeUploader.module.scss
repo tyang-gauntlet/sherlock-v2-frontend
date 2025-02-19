@@ -48,15 +48,31 @@
 }
 
 .highSeverity {
-  color: $color-error;
+  color: #dc3545;
 }
 
 .mediumSeverity {
-  color: $color-warning;
+  color: #ffc107;
 }
 
 .lowSeverity {
-  color: $color-info;
+  color: #17a2b8;
+}
+
+.vulnerabilityCard {
+  padding: $spacing-s;
+  margin-bottom: $spacing-xs;
+  border-radius: $border-radius;
+  background-color: rgba($color-background, 0.5);
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+}
+
+.contractCount {
+  color: rgba(0, 0, 0, 0.6);
+  margin-bottom: $spacing-xs;
 }
 
 .suggestion {

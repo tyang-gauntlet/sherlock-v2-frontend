@@ -32,11 +32,16 @@ type AnalysisResult = {
         type: string
         severity: string
         description: string
+        line?: number
+        contract?: string
+        function?: string
       }>
       suggestions: Array<{
         type: string
         severity: string
         description: string
+        line?: number
+        contract?: string
       }>
     }>
     risk_level: string
@@ -49,11 +54,16 @@ type AnalysisResult = {
     type: string
     severity: string
     description: string
+    line?: number
+    contract?: string
+    function?: string
   }>
   suggestions: Array<{
     type: string
     severity: string
     description: string
+    line?: number
+    contract?: string
   }>
 }
 
@@ -63,6 +73,11 @@ export const CodeUploader: React.FC = () => {
   const [files, setFiles] = useState<File[]>([])
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const sortBySeverity = useCallback((a: { severity: string }, b: { severity: string }) => {
+    const severityOrder: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 }
+    return (severityOrder[a.severity.toUpperCase()] ?? 3) - (severityOrder[b.severity.toUpperCase()] ?? 3)
+  }, [])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -210,20 +225,83 @@ export const CodeUploader: React.FC = () => {
               <Row spacing="xl">
                 <Text>Total Contracts: {analysisResult.total_contracts}</Text>
                 <Text>Total Functions: {analysisResult.total_functions}</Text>
-                <Text>Risk Level: {analysisResult.overall_risk_level}</Text>
+                <Row spacing="m">
+                  <Text className={styles.highSeverity}>
+                    High: {analysisResult.vulnerabilities.filter((v) => v.severity.toUpperCase() === "HIGH").length}
+                  </Text>
+                  <Text className={styles.mediumSeverity}>
+                    Medium: {analysisResult.vulnerabilities.filter((v) => v.severity.toUpperCase() === "MEDIUM").length}
+                  </Text>
+                  <Text className={styles.lowSeverity}>
+                    Low: {analysisResult.vulnerabilities.filter((v) => v.severity.toUpperCase() === "LOW").length}
+                  </Text>
+                </Row>
               </Row>
             </Column>
 
+            <Column spacing="s">
+              <Text strong>Analyzed Files</Text>
+              {analysisResult.files.map((file, index) => (
+                <Box key={index} shadow={false} className={styles.vulnerabilityCard}>
+                  <Column spacing="xs">
+                    <Row spacing="xs" alignment={["start", "center"]}>
+                      {renderSeverityIcon(file.risk_level)}
+                      <Text strong>{file.file_name}</Text>
+                    </Row>
+
+                    {file.error ? (
+                      <Text size="small" className={styles.highSeverity}>
+                        {file.error}
+                      </Text>
+                    ) : (
+                      <>
+                        <Text size="small" className={styles.contractCount}>
+                          {file.contracts.length > 1 ? `${file.contracts.length} Contracts:` : "1 Contract:"}
+                        </Text>
+                        {file.contracts.map((contract, cIndex) => (
+                          <Row key={cIndex} spacing="m" alignment={["start", "center"]}>
+                            <Text strong size="small">
+                              {contract.name}
+                            </Text>
+                            <Text size="small">
+                              ({contract.functions.length} functions, {contract.state_variables.length} variables)
+                            </Text>
+                          </Row>
+                        ))}
+                      </>
+                    )}
+                  </Column>
+                </Box>
+              ))}
+            </Column>
+
             {analysisResult.vulnerabilities.length > 0 && (
-              <Column spacing="m">
+              <Column spacing="s">
                 <Text strong>Vulnerabilities</Text>
-                {analysisResult.vulnerabilities.map((vuln, index) => (
-                  <Box key={index} shadow={false}>
-                    <Row spacing="s" alignment={["start", "center"]}>
+                {[...analysisResult.vulnerabilities].sort(sortBySeverity).map((vuln, index) => (
+                  <Box key={index} shadow={false} className={styles.vulnerabilityCard}>
+                    <Row spacing="xs" alignment={["start", "center"]}>
                       {renderSeverityIcon(vuln.severity)}
-                      <Column>
-                        <Text strong>{vuln.type}</Text>
-                        <Text>{vuln.description}</Text>
+                      <Column spacing="xs">
+                        <Row spacing="xs" alignment={["start", "center"]}>
+                          <Text strong>{vuln.type}</Text>
+                          <Text className={styles[`${vuln.severity.toLowerCase()}Severity`]}>({vuln.severity})</Text>
+                          {vuln.line && <Text size="small">Line {vuln.line}</Text>}
+                        </Row>
+                        <Row spacing="xs">
+                          <Text size="small">{vuln.description}</Text>
+                        </Row>
+                        {(vuln.contract || vuln.function) && (
+                          <Row spacing="xs">
+                            <Text size="small" strong>
+                              Location:{" "}
+                            </Text>
+                            <Text size="small">
+                              {vuln.contract && `Contract: ${vuln.contract}`}
+                              {vuln.function && ` → Function: ${vuln.function}`}
+                            </Text>
+                          </Row>
+                        )}
                       </Column>
                     </Row>
                   </Box>
@@ -232,44 +310,35 @@ export const CodeUploader: React.FC = () => {
             )}
 
             {analysisResult.suggestions.length > 0 && (
-              <Column spacing="m">
+              <Column spacing="s">
                 <Text strong>Suggestions</Text>
                 {analysisResult.suggestions.map((suggestion, index) => (
-                  <Box key={index} shadow={false}>
-                    <Row spacing="s" alignment={["start", "center"]}>
-                      <FaInfoCircle />
-                      <Column>
-                        <Text strong>{suggestion.type}</Text>
-                        <Text>{suggestion.description}</Text>
+                  <Box key={index} shadow={false} className={styles.vulnerabilityCard}>
+                    <Row spacing="xs" alignment={["start", "center"]}>
+                      <FaInfoCircle className={styles.lowSeverity} />
+                      <Column spacing="xs">
+                        <Row spacing="xs" alignment={["start", "center"]}>
+                          <Text strong>{suggestion.type}</Text>
+                          <Text className={styles.lowSeverity}>(Suggestion)</Text>
+                          {suggestion.line && <Text size="small">Line {suggestion.line}</Text>}
+                        </Row>
+                        <Row spacing="xs">
+                          <Text size="small">{suggestion.description}</Text>
+                        </Row>
+                        {suggestion.contract && (
+                          <Row spacing="xs">
+                            <Text size="small" strong>
+                              Location:{" "}
+                            </Text>
+                            <Text size="small">Contract: {suggestion.contract}</Text>
+                          </Row>
+                        )}
                       </Column>
                     </Row>
                   </Box>
                 ))}
               </Column>
             )}
-
-            {analysisResult.files.map((file, index) => (
-              <Box key={index} shadow={false}>
-                <Column spacing="m">
-                  <Row spacing="s" alignment={["start", "center"]}>
-                    {renderSeverityIcon(file.risk_level)}
-                    <Text strong>{file.file_name}</Text>
-                  </Row>
-
-                  {file.error ? (
-                    <Text>{file.error}</Text>
-                  ) : (
-                    file.contracts.map((contract, cIndex) => (
-                      <Column key={cIndex} spacing="s">
-                        <Text strong>{contract.name}</Text>
-                        <Text>Functions: {contract.functions.length}</Text>
-                        <Text>State Variables: {contract.state_variables.length}</Text>
-                      </Column>
-                    ))
-                  )}
-                </Column>
-              </Box>
-            ))}
           </Column>
         </Box>
       )}
