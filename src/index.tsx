@@ -35,15 +35,15 @@ root.render(
       <BrowserRouter>
         <WagmiProvider>
           <QueryClientProvider client={queryClient}>
-            <TxWaitProvider>
-              <FundraisePositionProvider>
-                <StakingPositionsProvider>
-                  <AuthenticationContextProvider>
+            <AuthenticationContextProvider>
+              <TxWaitProvider>
+                <FundraisePositionProvider>
+                  <StakingPositionsProvider>
                     <App />
-                  </AuthenticationContextProvider>
-                </StakingPositionsProvider>
-              </FundraisePositionProvider>
-            </TxWaitProvider>
+                  </StakingPositionsProvider>
+                </FundraisePositionProvider>
+              </TxWaitProvider>
+            </AuthenticationContextProvider>
           </QueryClientProvider>
         </WagmiProvider>
       </BrowserRouter>

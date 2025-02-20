@@ -76,7 +76,9 @@ export const CodeUploader: React.FC = () => {
 
   const sortBySeverity = useCallback((a: { severity: string }, b: { severity: string }) => {
     const severityOrder: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 }
-    return (severityOrder[a.severity.toUpperCase()] ?? 3) - (severityOrder[b.severity.toUpperCase()] ?? 3)
+    const aSeverity = a?.severity?.toUpperCase() ?? "UNKNOWN"
+    const bSeverity = b?.severity?.toUpperCase() ?? "UNKNOWN"
+    return (severityOrder[aSeverity] ?? 3) - (severityOrder[bSeverity] ?? 3)
   }, [])
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -145,7 +147,8 @@ export const CodeUploader: React.FC = () => {
   }, [files])
 
   const renderSeverityIcon = useCallback((severity: string) => {
-    switch (severity.toUpperCase()) {
+    const upperSeverity = severity?.toUpperCase() ?? "UNKNOWN"
+    switch (upperSeverity) {
       case "HIGH":
         return <FaExclamationTriangle className={styles.highSeverity} />
       case "MEDIUM":
@@ -153,7 +156,7 @@ export const CodeUploader: React.FC = () => {
       case "LOW":
         return <FaInfoCircle className={styles.lowSeverity} />
       default:
-        return null
+        return <FaInfoCircle className={styles.unknownSeverity} />
     }
   }, [])
 
@@ -227,13 +230,26 @@ export const CodeUploader: React.FC = () => {
                 <Text>Total Functions: {analysisResult.total_functions}</Text>
                 <Row spacing="m">
                   <Text className={styles.highSeverity}>
-                    High: {analysisResult.vulnerabilities.filter((v) => v.severity.toUpperCase() === "HIGH").length}
+                    High:{" "}
+                    {
+                      analysisResult.vulnerabilities.filter((v) => (v?.severity?.toUpperCase() ?? "UNKNOWN") === "HIGH")
+                        .length
+                    }
                   </Text>
                   <Text className={styles.mediumSeverity}>
-                    Medium: {analysisResult.vulnerabilities.filter((v) => v.severity.toUpperCase() === "MEDIUM").length}
+                    Medium:{" "}
+                    {
+                      analysisResult.vulnerabilities.filter(
+                        (v) => (v?.severity?.toUpperCase() ?? "UNKNOWN") === "MEDIUM"
+                      ).length
+                    }
                   </Text>
                   <Text className={styles.lowSeverity}>
-                    Low: {analysisResult.vulnerabilities.filter((v) => v.severity.toUpperCase() === "LOW").length}
+                    Low:{" "}
+                    {
+                      analysisResult.vulnerabilities.filter((v) => (v?.severity?.toUpperCase() ?? "UNKNOWN") === "LOW")
+                        .length
+                    }
                   </Text>
                 </Row>
               </Row>
@@ -256,15 +272,18 @@ export const CodeUploader: React.FC = () => {
                     ) : (
                       <>
                         <Text size="small" className={styles.contractCount}>
-                          {file.contracts.length > 1 ? `${file.contracts.length} Contracts:` : "1 Contract:"}
+                          {(file.contracts?.length ?? 0) > 1
+                            ? `${file.contracts?.length ?? 0} Contracts:`
+                            : "1 Contract:"}
                         </Text>
-                        {file.contracts.map((contract, cIndex) => (
+                        {(file.contracts ?? []).map((contract, cIndex) => (
                           <Row key={cIndex} spacing="m" alignment={["start", "center"]}>
                             <Text strong size="small">
                               {contract.name}
                             </Text>
                             <Text size="small">
-                              ({contract.functions.length} functions, {contract.state_variables.length} variables)
+                              ({contract.functions?.length ?? 0} functions, {contract.state_variables?.length ?? 0}{" "}
+                              variables)
                             </Text>
                           </Row>
                         ))}
@@ -275,17 +294,19 @@ export const CodeUploader: React.FC = () => {
               ))}
             </Column>
 
-            {analysisResult.vulnerabilities.length > 0 && (
+            {(analysisResult.vulnerabilities?.length ?? 0) > 0 && (
               <Column spacing="s">
                 <Text strong>Vulnerabilities</Text>
-                {[...analysisResult.vulnerabilities].sort(sortBySeverity).map((vuln, index) => (
+                {[...(analysisResult.vulnerabilities ?? [])].sort(sortBySeverity).map((vuln, index) => (
                   <Box key={index} shadow={false} className={styles.vulnerabilityCard}>
                     <Row spacing="xs" alignment={["start", "center"]}>
                       {renderSeverityIcon(vuln.severity)}
                       <Column spacing="xs">
                         <Row spacing="xs" alignment={["start", "center"]}>
                           <Text strong>{vuln.type}</Text>
-                          <Text className={styles[`${vuln.severity.toLowerCase()}Severity`]}>({vuln.severity})</Text>
+                          <Text className={styles[`${(vuln.severity ?? "unknown").toLowerCase()}Severity`]}>
+                            ({vuln.severity ?? "Unknown"})
+                          </Text>
                           {vuln.line && <Text size="small">Line {vuln.line}</Text>}
                         </Row>
                         <Row spacing="xs">
@@ -309,10 +330,10 @@ export const CodeUploader: React.FC = () => {
               </Column>
             )}
 
-            {analysisResult.suggestions.length > 0 && (
+            {(analysisResult.suggestions?.length ?? 0) > 0 && (
               <Column spacing="s">
                 <Text strong>Suggestions</Text>
-                {analysisResult.suggestions.map((suggestion, index) => (
+                {(analysisResult.suggestions ?? []).map((suggestion, index) => (
                   <Box key={index} shadow={false} className={styles.vulnerabilityCard}>
                     <Row spacing="xs" alignment={["start", "center"]}>
                       <FaInfoCircle className={styles.lowSeverity} />

@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  repo-processor:
+    build:
+      context: .
+      dockerfile: Dockerfile.processor
+    environment:
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_ENVIRONMENT=${PINECONE_ENVIRONMENT}
+    volumes:
+      - ./temp_repos:/app/temp_repos
+    tmpfs:
+      - /app/temp_repos:exec
+    mem_limit: 4g
+    mem_reservation: 2g

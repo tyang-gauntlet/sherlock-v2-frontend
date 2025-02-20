@@ -17,7 +17,7 @@ const checkEndpoint = async (url: string): Promise<boolean> => {
 
 export const getAPIURL = async (): Promise<string> => {
   const localURL = process.env.REACT_APP_API_LOCAL_URL || "http://localhost:5001"
-  const ec2URL = process.env.REACT_APP_API_EC2_URL || "http://ec2-52-90-169-241.compute-1.amazonaws.com:5001"
+  const ec2URL = process.env.REACT_APP_API_EC2_URL || "http://ec2-52-87-176-148.compute-1.amazonaws.com:5001"
 
   // Try local first
   if (await checkEndpoint(localURL)) {
