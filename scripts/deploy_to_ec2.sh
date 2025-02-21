@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Configuration
-EC2_HOST="ec2-52-87-176-148.compute-1.amazonaws.com"
+EC2_HOST="ec2-54-157-41-25.compute-1.amazonaws.com"
 EC2_USER="ec2-user"
 KEY_PATH="../smartsmart2.pem"
 REMOTE_APP_DIR="/home/ec2-user/sherlock-v2-frontend"

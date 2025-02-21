@@ -3,9 +3,9 @@
 set -e  # Exit on any error
 
 # Configuration
-EC2_HOST="ec2-52-87-176-148.compute-1.amazonaws.com"
+EC2_HOST="ec2-54-157-41-25.compute-1.amazonaws.com"
 EC2_USER="ubuntu"
-KEY_PATH="../smartsmart2.pem"
+KEY_PATH="../../smartsmart2.pem"
 REMOTE_DIR="/home/ubuntu/sherlock-v2-frontend"
 API_PORT="5001"
 
@@ -31,7 +31,7 @@ rsync -av --exclude '__pycache__' \
          --exclude '*.pyc' \
          --exclude 'analysis.log' \
          -e "ssh -i $KEY_PATH" \
-         ./api/ $EC2_USER@$EC2_HOST:$REMOTE_DIR/api/
+         ../api/ $EC2_USER@$EC2_HOST:$REMOTE_DIR/api/
 
 # Set up proper permissions and restart service
 echo "🔧 Setting up permissions and restarting service..."
