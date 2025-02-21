@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 import glob
 import re
+import git
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -41,69 +42,44 @@ class SolidityProcessor:
 
 
 class GithubRepoManager:
-    def __init__(self, github_token: str, base_dir: str = "repositories"):
-        """
-        Initialize the GitHub repository manager.
+    def __init__(self, github_token: str):
+        self.github_token = github_token
 
-        Args:
-            github_token (str): GitHub personal access token
-            base_dir (str): Base directory to store repositories
-        """
-        self.github = Github(github_token)
-        self.base_dir = base_dir
-        self.tracking_file = os.path.join(base_dir, "repo_tracking.json")
-        self.org_name = "sherlock-audit"
-        self.solidity_processor = SolidityProcessor()
-
-        # Create base directory if it doesn't exist
-        os.makedirs(base_dir, exist_ok=True)
-
-        # Initialize or load tracking data
-        self.tracking_data = self._load_tracking_data()
-
-    def _load_tracking_data(self) -> Dict:
-        """Load or initialize repository tracking data."""
-        if os.path.exists(self.tracking_file):
-            with open(self.tracking_file, 'r') as f:
-                return json.load(f)
-        return {
-            "codebase_repos": {},
-            "judging_repos": {},
-            "last_update": None
-        }
-
-    def _save_tracking_data(self):
-        """Save repository tracking data."""
-        with open(self.tracking_file, 'w') as f:
-            json.dump(self.tracking_data, f, indent=2)
-
-    def get_all_repositories(self) -> List[Dict]:
-        """
-        Fetch all repositories from the Sherlock Audit organization.
-        Returns a list of repository information.
-        """
-        org = self.github.get_organization(self.org_name)
-        repos = []
-
-        for repo in org.get_repos():
-            repo_info = {
-                "name": repo.name,
-                "clone_url": repo.clone_url,
-                "updated_at": repo.updated_at.isoformat(),
-                "is_judging": repo.name.endswith("-judging")
-            }
-            repos.append(repo_info)
-
-        return repos
-
-    def clone_repository(self, repo_info: Dict, target_path: str) -> bool:
-        """Clone a repository to a specific path"""
+    def clone_repository(self, repo_info: Dict, target_dir: str) -> bool:
+        """Clone a repository to the target directory"""
         try:
-            if os.path.exists(target_path):
-                shutil.rmtree(target_path)
+            logger.info(
+                f"Preparing to clone {repo_info['name']} to {target_dir}")
 
-            os.makedirs(target_path, exist_ok=True)
-            Repo.clone_from(repo_info["clone_url"], target_path)
+            # Clean up target directory if it exists
+            if os.path.exists(target_dir):
+                logger.info(f"Cleaning up existing directory: {target_dir}")
+                shutil.rmtree(target_dir)
+
+            # Create target directory
+            os.makedirs(target_dir, exist_ok=True)
+
+            # Get clone URL
+            clone_url = repo_info.get('clone_url')
+            if not clone_url:
+                logger.error(f"No clone URL provided for {repo_info['name']}")
+                return False
+
+            logger.info(f"Cloning repository: {repo_info['name']}")
+
+            # Handle SSH URLs
+            if clone_url.startswith('git@'):
+                # Use SSH key authentication
+                Repo.clone_from(clone_url, target_dir)
+            else:
+                # Use HTTPS with token authentication
+                auth_url = clone_url.replace(
+                    'https://',
+                    f'https://{self.github_token}@'
+                )
+                Repo.clone_from(auth_url, target_dir)
+
+            logger.info(f"Successfully cloned {repo_info['name']}")
             return True
 
         except Exception as e:
@@ -112,16 +88,90 @@ class GithubRepoManager:
             return False
 
     def process_repository_content(self, repo_info: Dict, repo_path: str) -> Generator[Dict, None, None]:
-        """Process repository content based on type (codebase or audit)"""
+        """Process repository content based on type"""
         try:
-            if repo_info["is_judging"]:
-                yield from self._process_judging_repo(repo_path, repo_info["name"])
+            # Check if repository name ends with '-judging'
+            if repo_info['name'].endswith('-judging'):
+                yield from self._process_judging_repository(repo_path)
             else:
-                yield from self._process_codebase_repo(repo_path, repo_info["name"])
+                yield from self._process_main_repository(repo_path)
+        except Exception as e:
+            logger.error(f"Error processing repository content: {str(e)}")
+
+    def _process_judging_repository(self, repo_path: str) -> Generator[Dict, None, None]:
+        """Process judging repository content"""
+        # Look for markdown files in the root directory first
+        for file in os.listdir(repo_path):
+            if file.endswith('.md'):
+                yield {
+                    "type": "vulnerability_report",
+                    "report_file": file
+                }
+
+        # Then look in the 'report' or 'reports' directory if it exists
+        report_dirs = ['report', 'reports', 'findings', 'issues']
+        for report_dir in report_dirs:
+            dir_path = os.path.join(repo_path, report_dir)
+            if os.path.exists(dir_path) and os.path.isdir(dir_path):
+                for root, _, files in os.walk(dir_path):
+                    for file in files:
+                        if file.endswith('.md'):
+                            rel_path = os.path.relpath(
+                                os.path.join(root, file), repo_path)
+                            yield {
+                                "type": "vulnerability_report",
+                                "report_file": rel_path
+                            }
+
+    def _process_main_repository(self, repo_path: str) -> Generator[Dict, None, None]:
+        """Process main repository content"""
+        for root, _, files in os.walk(repo_path):
+            for file in files:
+                if file.endswith('.sol'):
+                    rel_path = os.path.relpath(
+                        os.path.join(root, file), repo_path)
+                    yield {
+                        "type": "solidity_file",
+                        "file_path": rel_path
+                    }
+
+    def get_all_repositories(self) -> List[Dict]:
+        """
+        Fetch all repositories from the Sherlock Audit organization.
+        Returns a list of repository information.
+        """
+        try:
+            org = self.github.get_organization("sherlock-audit")
+            repos = []
+
+            # Check rate limit
+            rate_limit = self.github.get_rate_limit()
+            if rate_limit.core.remaining < 10:  # Ensure we have enough requests
+                reset_time = rate_limit.core.reset.timestamp() - datetime.now().timestamp()
+                logger.warning(
+                    f"GitHub API rate limit low. Resets in {int(reset_time)} seconds")
+                if rate_limit.core.remaining == 0:
+                    raise Exception("GitHub API rate limit exceeded")
+
+            for repo in org.get_repos():
+                try:
+                    repo_info = {
+                        "name": repo.name,
+                        "clone_url": repo.clone_url,
+                        "updated_at": repo.updated_at.isoformat() if repo.updated_at else None,
+                        "is_judging": repo.name.endswith("-judging")
+                    }
+                    repos.append(repo_info)
+                except Exception as repo_error:
+                    logger.error(
+                        f"Error processing repository {repo.name}: {str(repo_error)}")
+                    continue
+
+            return repos
 
         except Exception as e:
-            logger.error(
-                f"Error processing repository {repo_info['name']}: {str(e)}")
+            logger.error(f"Error fetching repositories from GitHub: {str(e)}")
+            return []
 
     def _process_codebase_repo(self, repo_path: str, repo_name: str) -> Generator[Dict, None, None]:
         """Process a codebase repository, extracting Solidity files"""

@@ -16,22 +16,32 @@ const checkEndpoint = async (url: string): Promise<boolean> => {
 }
 
 export const getAPIURL = async (): Promise<string> => {
+  // Debug logging
+  console.log("All environment variables:", process.env)
+  console.log("REACT_APP_API_EC2_URL value:", process.env.REACT_APP_API_EC2_URL)
+
+  // Temporarily hardcode the new EC2 URL
+  const ec2URL = "http://ec2-54-157-41-25.compute-1.amazonaws.com:5001"
   const localURL = process.env.REACT_APP_API_LOCAL_URL || "http://localhost:5001"
-  const ec2URL = process.env.REACT_APP_API_EC2_URL || "http://ec2-52-87-176-148.compute-1.amazonaws.com:5001"
 
-  // Try local first
-  if (await checkEndpoint(localURL)) {
-    console.log("Using local API endpoint")
-    return localURL
-  }
-
-  // Fallback to EC2
+  console.log("Final EC2 URL after fallback:", ec2URL)
+  console.log("Trying EC2 URL:", ec2URL)
+  // Try EC2 first
   if (await checkEndpoint(ec2URL)) {
-    console.log("Using EC2 API endpoint")
+    console.log("Successfully connected to EC2")
     return ec2URL
   }
+  console.log("EC2 connection failed")
 
-  // Default to local if both fail
-  console.warn("Both endpoints failed, defaulting to local")
-  return localURL
+  console.log("Trying local URL:", localURL)
+  // Fallback to local
+  if (await checkEndpoint(localURL)) {
+    console.log("Successfully connected to local")
+    return localURL
+  }
+  console.log("Local connection failed")
+
+  // Default to EC2 if both fail
+  console.warn("Both endpoints failed, defaulting to EC2:", ec2URL)
+  return ec2URL
 }
