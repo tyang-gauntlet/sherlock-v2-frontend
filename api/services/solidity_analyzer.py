@@ -4,9 +4,12 @@ import subprocess
 import logging
 from typing import List, Dict, Any
 
+# Create logs directory if it doesn't exist
+os.makedirs('logs', exist_ok=True)
+
 # Set up logging
 logging.basicConfig(
-    filename='/var/log/sherlock-api.analysis.log',
+    filename='logs/sherlock-api.analysis.log',
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )

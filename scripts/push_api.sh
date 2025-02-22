@@ -46,6 +46,12 @@ ssh -i $KEY_PATH $EC2_USER@$EC2_HOST "
     sudo chown ubuntu:ubuntu /var/log/sherlock-api.out.log /var/log/sherlock-api.err.log /var/log/sherlock-api.analysis.log
     sudo chmod 644 /var/log/sherlock-api.out.log /var/log/sherlock-api.err.log /var/log/sherlock-api.analysis.log
 
+    # Install dependencies
+    echo '🐍 Installing Python packages...'
+    source ~/venv/bin/activate
+    pip install -r $REMOTE_DIR/api/requirements.txt
+    pip install slither-analyzer 'crytic-compile>=0.3.1' solc-select
+
     # Restart the service
     sudo supervisorctl reread
     sudo supervisorctl update

@@ -3,7 +3,7 @@ import { Box } from "../../components/Box"
 import { Column, Row } from "../../components/Layout"
 import { Title } from "../../components/Title"
 import { Text } from "../../components/Text"
-import { CodeUploader } from "./components/CodeUploader"
+import { ContractAnalyzer } from "./components/CodeUploader"
 import { FaShieldAlt, FaRobot, FaClock, FaDollarSign } from "react-icons/fa"
 
 import styles from "./AI.module.scss"
@@ -60,7 +60,7 @@ export const AIPage: React.FC = () => {
         <Column spacing="m">
           <Title variant="h3">Code Analysis</Title>
           <Text>Upload your Solidity smart contracts for AI-powered analysis and vulnerability detection</Text>
-          <CodeUploader />
+          <ContractAnalyzer />
         </Column>
       </Box>
     </Column>

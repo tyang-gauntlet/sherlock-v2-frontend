@@ -3,7 +3,7 @@
 # Configuration
 EC2_HOST="ec2-54-157-41-25.compute-1.amazonaws.com"
 EC2_USER="ubuntu"
-KEY_PATH="../smartsmart2.pem"
+KEY_PATH="../../smartsmart2.pem"
 REMOTE_DIR="/home/ubuntu/sherlock-v2-frontend"
 
 # Ensure key has correct permissions
@@ -30,8 +30,8 @@ ssh -i $KEY_PATH $EC2_USER@$EC2_HOST "
 
     echo '🐍 Installing Python packages...'
     pip install --upgrade pip
-    pip install flask flask-cors python-dotenv gunicorn slither-analyzer
-    pip install 'crytic-compile>=0.3.1' solc-select
+    pip install -r $REMOTE_DIR/api/requirements.txt
+    pip install slither-analyzer 'crytic-compile>=0.3.1' solc-select
 
     echo '🔧 Setting up Solidity compiler...'
     solc-select install 0.8.28

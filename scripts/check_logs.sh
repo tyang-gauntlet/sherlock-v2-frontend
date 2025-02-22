@@ -3,7 +3,7 @@
 # Configuration
 EC2_HOST="ec2-54-157-41-25.compute-1.amazonaws.com"
 EC2_USER="ubuntu"
-KEY_PATH="../../smartsmart2.pem"
+KEY_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/../smartsmart2.pem"
 REMOTE_DIR="/home/ubuntu/sherlock-v2-frontend"
 
 # Ensure key has correct permissions

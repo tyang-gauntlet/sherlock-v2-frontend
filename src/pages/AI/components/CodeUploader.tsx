@@ -10,64 +10,126 @@ import { getAPIURL } from "../../../utils/api"
 import styles from "./CodeUploader.module.scss"
 
 type AnalysisResult = {
-  files: Array<{
+  analysis_summary: string
+  analyzed_documents: Array<{
+    document_id: string
+    metadata: {
+      repo_name: string
+      report_file: string
+      file_path: string
+      commit_hash: string
+      timestamp: string
+      type: string
+      category: string
+      severity: string
+      start_line?: number
+      end_line?: number
+      function?: string
+      contract?: string
+    }
+    content: {
+      code_snippet: string
+      context: string
+      description: string
+    }
+    similarity: {
+      score: number
+      vector_id: string
+      embedding_model: string
+      embedding_dimension: number
+    }
+    evaluation: {
+      relevance_score: number
+      explanation: string
+      affected_regions: string[]
+      risk_level: string
+      confidence: number
+    }
+  }>
+  batch_statistics: {
+    similarity_stats: {
+      mean: number
+      median: number
+      std_dev: number
+      min: number
+      max: number
+    }
+    relevance_stats: {
+      mean: number
+      median: number
+      std_dev: number
+      min: number
+      max: number
+    }
+    confidence_stats: {
+      mean: number
+      median: number
+      std_dev: number
+      min: number
+      max: number
+    }
+    total_documents_retrieved: number
+    total_documents_analyzed: number
+    risk_level_distribution: {
+      HIGH: number
+      MEDIUM: number
+      LOW: number
+      NONE: number
+    }
+    category_distribution: {
+      [key: string]: {
+        count: number
+        avg_relevance: number
+        avg_similarity: number
+      }
+    }
+  }
+  model_info: {
+    embedding_model: string
+    llm_model: string
+    embedding_dimension: number
+    timestamp: string
+  }
+  files?: Array<{
     file_name: string
-    contracts: Array<{
-      name: string
-      functions: Array<{
-        name: string
-        visibility: string
-        modifiers: string[]
-        parameters: Array<{
-          name: string
-          type: string
-        }>
-      }>
-      state_variables: Array<{
-        name: string
-        type: string
-        visibility: string
-      }>
-      vulnerabilities: Array<{
-        type: string
-        severity: string
-        description: string
-        line?: number
-        contract?: string
-        function?: string
-      }>
-      suggestions: Array<{
-        type: string
-        severity: string
-        description: string
-        line?: number
-        contract?: string
-      }>
-    }>
-    risk_level: string
     error?: string
-  }>
-  overall_risk_level: string
-  total_contracts: number
-  total_functions: number
-  vulnerabilities: Array<{
-    type: string
-    severity: string
-    description: string
-    line?: number
-    contract?: string
-    function?: string
-  }>
-  suggestions: Array<{
-    type: string
-    severity: string
-    description: string
-    line?: number
-    contract?: string
+    vulnerabilities?: Array<{
+      type: string
+      description: string
+      severity: string
+      confidence: string
+      contract?: string
+      function?: string
+    }>
   }>
 }
 
-export const CodeUploader: React.FC = () => {
+type Finding = {
+  category: string
+  severity: string
+  context: string
+  similarity_score: number
+  relevance_score: number
+  affected_code?: string[]
+  source: {
+    repo_name: string
+    file_path: string
+    code_snippet: string
+    start_line?: number
+    end_line?: number
+  }
+}
+
+type VulnerabilityGroup = {
+  location: string
+  scope: string
+  codeContext: string
+  findings: Finding[]
+  aggregatedRisk: string
+  recommendations: string[]
+}
+
+export const ContractAnalyzer: React.FC = () => {
   const [isDragging, setIsDragging] = useState(false)
   const [isUploading, setIsUploading] = useState(false)
   const [files, setFiles] = useState<File[]>([])
@@ -126,17 +188,102 @@ export const CodeUploader: React.FC = () => {
 
     try {
       const apiUrl = await getAPIURL()
-      const response = await fetch(`${apiUrl}/analyze`, {
+
+      // First get the standard Slither analysis
+      const analysisResponse = await fetch(`${apiUrl}/analyze`, {
         method: "POST",
         body: formData,
       })
 
-      if (!response.ok) {
-        throw new Error("Upload failed")
+      if (!analysisResponse.ok) {
+        throw new Error("Analysis failed")
       }
 
-      const result = await response.json()
-      setAnalysisResult(result)
+      const analysisData = await analysisResponse.json()
+
+      // Prepare RAG analysis for each file
+      const ragPromises = []
+
+      for (const file of files) {
+        const fileContent = await file.text()
+
+        // Analyze the whole file
+        ragPromises.push(
+          fetch(`${apiUrl}/rag/analyze`, {
+            method: "POST",
+            body: JSON.stringify({
+              code: fileContent,
+              context: `Full file analysis of ${file.name}`,
+              scope: "file",
+            }),
+            headers: {
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+          })
+            .then((res) => {
+              if (!res.ok) {
+                throw new Error(`RAG analysis failed: ${res.statusText}`)
+              }
+              return res.json()
+            })
+            .catch((error) => {
+              console.error("RAG analysis error:", error)
+              return null
+            })
+        )
+      }
+
+      // Wait for all RAG analyses to complete
+      const ragResults = await Promise.all(ragPromises)
+
+      // Filter out failed results
+      const validResults = ragResults.filter((result) => result !== null)
+
+      if (validResults.length === 0) {
+        throw new Error("All RAG analyses failed")
+      }
+
+      // Combine all analyzed documents
+      const allAnalyzedDocuments = validResults.flatMap((result) => result.analyzed_documents || [])
+
+      // Combine all batch statistics
+      const combinedBatchStats = {
+        similarity_stats: calculateCombinedStats(validResults.map((r) => r.batch_statistics?.similarity_stats)),
+        relevance_stats: calculateCombinedStats(validResults.map((r) => r.batch_statistics?.relevance_stats)),
+        confidence_stats: calculateCombinedStats(validResults.map((r) => r.batch_statistics?.confidence_stats)),
+        total_documents_retrieved: validResults.reduce(
+          (sum, r) => sum + (r.batch_statistics?.total_documents_retrieved || 0),
+          0
+        ),
+        total_documents_analyzed: validResults.reduce(
+          (sum, r) => sum + (r.batch_statistics?.total_documents_analyzed || 0),
+          0
+        ),
+        risk_level_distribution: {
+          HIGH: validResults.reduce((sum, r) => sum + (r.batch_statistics?.risk_level_distribution?.HIGH || 0), 0),
+          MEDIUM: validResults.reduce((sum, r) => sum + (r.batch_statistics?.risk_level_distribution?.MEDIUM || 0), 0),
+          LOW: validResults.reduce((sum, r) => sum + (r.batch_statistics?.risk_level_distribution?.LOW || 0), 0),
+          NONE: validResults.reduce((sum, r) => sum + (r.batch_statistics?.risk_level_distribution?.NONE || 0), 0),
+        },
+        category_distribution: combineCategoryDistributions(
+          validResults.map((r) => r.batch_statistics?.category_distribution)
+        ),
+      }
+
+      // Set the analysis result with both Slither and RAG results
+      setAnalysisResult({
+        analysis_summary: validResults[0]?.analysis_summary || "",
+        analyzed_documents: allAnalyzedDocuments,
+        batch_statistics: combinedBatchStats,
+        model_info: validResults[0]?.model_info || {
+          embedding_model: "sentence-transformers/all-mpnet-base-v2",
+          llm_model: "gpt-4",
+          embedding_dimension: 768,
+          timestamp: new Date().toISOString(),
+        },
+        files: analysisData.files, // Include Slither analysis results
+      })
       setFiles([])
     } catch (error) {
       setError(error instanceof Error ? error.message : "An error occurred")
@@ -145,6 +292,52 @@ export const CodeUploader: React.FC = () => {
       setIsUploading(false)
     }
   }, [files])
+
+  // Helper function to calculate combined statistics
+  const calculateCombinedStats = (
+    statsArray: Array<{ mean: number; median: number; std_dev: number; min: number; max: number } | undefined>
+  ) => {
+    const validStats = statsArray.filter((s): s is NonNullable<typeof s> => s !== undefined)
+    if (validStats.length === 0) {
+      return { mean: 0, median: 0, std_dev: 0, min: 0, max: 0 }
+    }
+    return {
+      mean: validStats.reduce((sum, s) => sum + s.mean, 0) / validStats.length,
+      median: validStats.reduce((sum, s) => sum + s.median, 0) / validStats.length,
+      std_dev: validStats.reduce((sum, s) => sum + s.std_dev, 0) / validStats.length,
+      min: Math.min(...validStats.map((s) => s.min)),
+      max: Math.max(...validStats.map((s) => s.max)),
+    }
+  }
+
+  // Helper function to combine category distributions
+  const combineCategoryDistributions = (
+    distributions: Array<Record<string, { count: number; avg_relevance: number; avg_similarity: number }> | undefined>
+  ) => {
+    const combined: Record<string, { count: number; avg_relevance: number; avg_similarity: number }> = {}
+
+    distributions.forEach((dist) => {
+      if (!dist) return
+      Object.entries(dist).forEach(([category, stats]) => {
+        if (!combined[category]) {
+          combined[category] = { count: 0, avg_relevance: 0, avg_similarity: 0 }
+        }
+        combined[category].count += stats.count
+        combined[category].avg_relevance += stats.avg_relevance * stats.count
+        combined[category].avg_similarity += stats.avg_similarity * stats.count
+      })
+    })
+
+    // Normalize averages
+    Object.values(combined).forEach((stats) => {
+      if (stats.count > 0) {
+        stats.avg_relevance /= stats.count
+        stats.avg_similarity /= stats.count
+      }
+    })
+
+    return combined
+  }
 
   const renderSeverityIcon = useCallback((severity: string) => {
     const upperSeverity = severity?.toUpperCase() ?? "UNKNOWN"
@@ -168,11 +361,13 @@ export const CodeUploader: React.FC = () => {
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
+          onClick={() => document.getElementById("file-input")?.click()}
         >
           <Column spacing="m" alignment="center">
             <FaCloudUploadAlt size={48} />
             <Text>Drag and drop Solidity files or click to select</Text>
             <input
+              id="file-input"
               type="file"
               accept=".sol,application/json"
               multiple
@@ -218,148 +413,234 @@ export const CodeUploader: React.FC = () => {
       {analysisResult && (
         <Box shadow={false} fullWidth>
           <Column spacing="l">
-            <Row spacing="s" alignment={["start", "center"]}>
-              {renderSeverityIcon(analysisResult.overall_risk_level)}
-              <Title variant="h3">Analysis Results</Title>
-            </Row>
+            <Title variant="h3">Analysis Results</Title>
 
+            {/* Slither Static Analysis Results */}
             <Column spacing="m">
-              <Text strong>Overview</Text>
-              <Row spacing="xl">
-                <Text>Total Contracts: {analysisResult.total_contracts}</Text>
-                <Text>Total Functions: {analysisResult.total_functions}</Text>
-                <Row spacing="m">
-                  <Text className={styles.highSeverity}>
-                    High:{" "}
-                    {
-                      analysisResult.vulnerabilities.filter((v) => (v?.severity?.toUpperCase() ?? "UNKNOWN") === "HIGH")
-                        .length
-                    }
-                  </Text>
-                  <Text className={styles.mediumSeverity}>
-                    Medium:{" "}
-                    {
-                      analysisResult.vulnerabilities.filter(
-                        (v) => (v?.severity?.toUpperCase() ?? "UNKNOWN") === "MEDIUM"
-                      ).length
-                    }
-                  </Text>
-                  <Text className={styles.lowSeverity}>
-                    Low:{" "}
-                    {
-                      analysisResult.vulnerabilities.filter((v) => (v?.severity?.toUpperCase() ?? "UNKNOWN") === "LOW")
-                        .length
-                    }
-                  </Text>
-                </Row>
-              </Row>
-            </Column>
-
-            <Column spacing="s">
-              <Text strong>Analyzed Files</Text>
-              {analysisResult.files.map((file, index) => (
-                <Box key={index} shadow={false} className={styles.vulnerabilityCard}>
-                  <Column spacing="xs">
-                    <Row spacing="xs" alignment={["start", "center"]}>
-                      {renderSeverityIcon(file.risk_level)}
-                      <Text strong>{file.file_name}</Text>
-                    </Row>
-
+              <Box shadow={false} className={styles.terminalOutput}>
+                {analysisResult.files?.map((file, fileIndex) => (
+                  <Column key={fileIndex} spacing="s">
+                    <Text strong>{file.file_name}</Text>
                     {file.error ? (
-                      <Text size="small" className={styles.highSeverity}>
-                        {file.error}
-                      </Text>
+                      <Text className={styles.error}>{file.error}</Text>
                     ) : (
-                      <>
-                        <Text size="small" className={styles.contractCount}>
-                          {(file.contracts?.length ?? 0) > 1
-                            ? `${file.contracts?.length ?? 0} Contracts:`
-                            : "1 Contract:"}
-                        </Text>
-                        {(file.contracts ?? []).map((contract, cIndex) => (
-                          <Row key={cIndex} spacing="m" alignment={["start", "center"]}>
-                            <Text strong size="small">
-                              {contract.name}
-                            </Text>
-                            <Text size="small">
-                              ({contract.functions?.length ?? 0} functions, {contract.state_variables?.length ?? 0}{" "}
-                              variables)
-                            </Text>
-                          </Row>
-                        ))}
-                      </>
+                      <div className={styles.vulnGroups}>
+                        {["HIGH", "MEDIUM", "LOW"].map((severity) => {
+                          const vulnsForSeverity =
+                            file.vulnerabilities?.filter((v) => v.severity.toUpperCase() === severity) || []
+
+                          if (vulnsForSeverity.length === 0) return null
+
+                          return (
+                            <div key={severity} className={styles.vulnGroup}>
+                              <div className={`${styles.vulnGroupHeader} ${styles[severity.toLowerCase()]}`}>
+                                <span className={styles.vulnCount}>{vulnsForSeverity.length}</span>
+                                <Text strong>{severity}</Text>
+                              </div>
+                              {vulnsForSeverity.map((vuln, vulnIndex) => {
+                                // Extract line numbers from description if present
+                                const lineMatch = vuln.description.match(/\.sol#(\d+-\d+|\d+)/)
+                                const lineInfo = lineMatch ? `#${lineMatch[1]}` : ""
+
+                                // Split description into text and code parts
+                                const codeMatch = vuln.description.match(/"([^"]+)"/)
+                                const code = codeMatch ? codeMatch[1] : ""
+                                const description = vuln.description
+                                  .replace(/\([^)]*\.sol#[^)]*\)/g, "")
+                                  .replace(/"[^"]*"/, "")
+                                  .replace(/\s+/g, " ")
+                                  .trim()
+
+                                return (
+                                  <div key={vulnIndex} className={styles.vulnDetails}>
+                                    <div className={styles.vulnTitle}>
+                                      <div className={styles.vulnTitleMain}>
+                                        <Text strong>{vuln.type}</Text>
+                                        {lineInfo && <span className={styles.lineInfo}>{lineInfo}</span>}
+                                      </div>
+                                      <span className={styles.vulnConfidence}>{vuln.confidence}</span>
+                                    </div>
+                                    <div className={styles.vulnDescription}>{description}</div>
+                                    {code && (
+                                      <div className={styles.codeBlock}>
+                                        <code>{code}</code>
+                                      </div>
+                                    )}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )
+                        })}
+                      </div>
                     )}
                   </Column>
-                </Box>
-              ))}
+                ))}
+              </Box>
             </Column>
 
-            {(analysisResult.vulnerabilities?.length ?? 0) > 0 && (
-              <Column spacing="s">
-                <Text strong>Vulnerabilities</Text>
-                {[...(analysisResult.vulnerabilities ?? [])].sort(sortBySeverity).map((vuln, index) => (
-                  <Box key={index} shadow={false} className={styles.vulnerabilityCard}>
-                    <Row spacing="xs" alignment={["start", "center"]}>
-                      {renderSeverityIcon(vuln.severity)}
-                      <Column spacing="xs">
-                        <Row spacing="xs" alignment={["start", "center"]}>
-                          <Text strong>{vuln.type}</Text>
-                          <Text className={styles[`${(vuln.severity ?? "unknown").toLowerCase()}Severity`]}>
-                            ({vuln.severity ?? "Unknown"})
+            {/* RAG Analysis Results */}
+            <Column spacing="m">
+              <Title variant="h4">AI-Powered Analysis</Title>
+              <Box shadow={false} className={styles.terminalOutput}>
+                <Column spacing="m">
+                  {/* Analysis Summary Section */}
+                  <div className={styles.analysisSection}>
+                    <Text strong className={styles.sectionTitle}>
+                      📊 Analysis Summary
+                    </Text>
+                    <div className={styles.analysisSummary}>
+                      <Text>{analysisResult.analysis_summary}</Text>
+                    </div>
+                  </div>
+
+                  {/* Vulnerability Analysis Section */}
+                  <div className={styles.analysisSection}>
+                    <Text strong className={styles.sectionTitle}>
+                      🔍 Detailed Vulnerability Analysis
+                    </Text>
+                    {analysisResult.analyzed_documents
+                      .sort((a, b) => b.evaluation.relevance_score - a.evaluation.relevance_score)
+                      .map((doc, index) => {
+                        const location =
+                          doc.metadata.type === "function"
+                            ? `Function ${doc.metadata.function} in ${doc.metadata.contract}`
+                            : doc.metadata.type === "contract"
+                            ? `Contract ${doc.metadata.contract}`
+                            : `File ${doc.metadata.file_path}`
+
+                        const riskLevelClass = `risk${doc.evaluation.risk_level}`
+
+                        return (
+                          <div key={index} className={styles.vulnAnalysis}>
+                            <div className={`${styles.vulnHeader} ${styles[riskLevelClass]}`}>
+                              <Text strong>📍 {location}</Text>
+                              <span className={styles.riskBadge}>{doc.evaluation.risk_level}</span>
+                            </div>
+                            <div className={styles.vulnContent}>
+                              <div className={styles.codeSnippet}>
+                                <Text className={styles.snippetTitle}>Relevant Code:</Text>
+                                <pre>
+                                  <code>{doc.content.code_snippet}</code>
+                                </pre>
+                              </div>
+                              <div className={styles.vulnDetails}>
+                                <Text className={styles.vulnExplanation}>{doc.evaluation.explanation}</Text>
+                                <div className={styles.vulnMetadata}>
+                                  <div className={styles.metadataItem}>
+                                    <Text strong>Affected Regions:</Text>
+                                    <Text>{doc.evaluation.affected_regions.join(", ")}</Text>
+                                  </div>
+                                  <div className={styles.metadataStats}>
+                                    <span className={styles.statItem}>
+                                      Relevance: {Math.round(doc.evaluation.relevance_score * 100)}%
+                                    </span>
+                                    <span className={styles.statItem}>
+                                      Confidence: {Math.round(doc.evaluation.confidence * 100)}%
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                  </div>
+
+                  {/* Analysis Statistics Section */}
+                  <div className={styles.analysisSection}>
+                    <Text strong className={styles.sectionTitle}>
+                      📈 Analysis Statistics
+                    </Text>
+                    <div className={styles.statsGrid}>
+                      <div className={styles.statCard}>
+                        <Text strong>Documents Analyzed</Text>
+                        <div className={styles.statValue}>
+                          <Text>{analysisResult.batch_statistics.total_documents_analyzed}</Text>
+                          <Text size="small" className={styles.statLabel}>
+                            out of {analysisResult.batch_statistics.total_documents_retrieved} retrieved
                           </Text>
-                          {vuln.line && <Text size="small">Line {vuln.line}</Text>}
-                        </Row>
-                        <Row spacing="xs">
-                          <Text size="small">{vuln.description}</Text>
-                        </Row>
-                        {(vuln.contract || vuln.function) && (
-                          <Row spacing="xs">
-                            <Text size="small" strong>
-                              Location:{" "}
+                        </div>
+                      </div>
+
+                      <div className={styles.statCard}>
+                        <Text strong>Risk Distribution</Text>
+                        <div className={styles.riskDistribution}>
+                          <div className={styles.riskBar}>
+                            <div
+                              className={`${styles.riskSegment} ${styles.highRisk}`}
+                              style={{
+                                flex: analysisResult.batch_statistics.risk_level_distribution.HIGH || 0,
+                              }}
+                            >
+                              <Text size="small">
+                                HIGH: {analysisResult.batch_statistics.risk_level_distribution.HIGH || 0}
+                              </Text>
+                            </div>
+                            <div
+                              className={`${styles.riskSegment} ${styles.mediumRisk}`}
+                              style={{
+                                flex: analysisResult.batch_statistics.risk_level_distribution.MEDIUM || 0,
+                              }}
+                            >
+                              <Text size="small">
+                                MED: {analysisResult.batch_statistics.risk_level_distribution.MEDIUM || 0}
+                              </Text>
+                            </div>
+                            <div
+                              className={`${styles.riskSegment} ${styles.lowRisk}`}
+                              style={{
+                                flex: analysisResult.batch_statistics.risk_level_distribution.LOW || 0,
+                              }}
+                            >
+                              <Text size="small">
+                                LOW: {analysisResult.batch_statistics.risk_level_distribution.LOW || 0}
+                              </Text>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className={styles.statCard}>
+                        <Text strong>Similarity Scores</Text>
+                        <div className={styles.scoreStats}>
+                          <div className={styles.scoreStat}>
+                            <Text size="small">
+                              Mean: {(analysisResult.batch_statistics.similarity_stats.mean * 100).toFixed(1)}%
                             </Text>
                             <Text size="small">
-                              {vuln.contract && `Contract: ${vuln.contract}`}
-                              {vuln.function && ` → Function: ${vuln.function}`}
+                              Median: {(analysisResult.batch_statistics.similarity_stats.median * 100).toFixed(1)}%
                             </Text>
-                          </Row>
-                        )}
-                      </Column>
-                    </Row>
-                  </Box>
-                ))}
-              </Column>
-            )}
+                          </div>
+                        </div>
+                      </div>
 
-            {(analysisResult.suggestions?.length ?? 0) > 0 && (
-              <Column spacing="s">
-                <Text strong>Suggestions</Text>
-                {(analysisResult.suggestions ?? []).map((suggestion, index) => (
-                  <Box key={index} shadow={false} className={styles.vulnerabilityCard}>
-                    <Row spacing="xs" alignment={["start", "center"]}>
-                      <FaInfoCircle className={styles.lowSeverity} />
-                      <Column spacing="xs">
-                        <Row spacing="xs" alignment={["start", "center"]}>
-                          <Text strong>{suggestion.type}</Text>
-                          <Text className={styles.lowSeverity}>(Suggestion)</Text>
-                          {suggestion.line && <Text size="small">Line {suggestion.line}</Text>}
-                        </Row>
-                        <Row spacing="xs">
-                          <Text size="small">{suggestion.description}</Text>
-                        </Row>
-                        {suggestion.contract && (
-                          <Row spacing="xs">
-                            <Text size="small" strong>
-                              Location:{" "}
+                      <div className={styles.statCard}>
+                        <Text strong>Relevance Scores</Text>
+                        <div className={styles.scoreStats}>
+                          <div className={styles.scoreStat}>
+                            <Text size="small">
+                              Mean: {(analysisResult.batch_statistics.relevance_stats.mean * 100).toFixed(1)}%
                             </Text>
-                            <Text size="small">Contract: {suggestion.contract}</Text>
-                          </Row>
-                        )}
-                      </Column>
-                    </Row>
-                  </Box>
-                ))}
-              </Column>
-            )}
+                            <Text size="small">
+                              Median: {(analysisResult.batch_statistics.relevance_stats.median * 100).toFixed(1)}%
+                            </Text>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className={styles.modelInfo}>
+                      <Text strong>🤖 Model Information</Text>
+                      <div className={styles.modelDetails}>
+                        <Text size="small">Embedding Model: {analysisResult.model_info.embedding_model}</Text>
+                        <Text size="small">LLM: {analysisResult.model_info.llm_model}</Text>
+                      </div>
+                    </div>
+                  </div>
+                </Column>
+              </Box>
+            </Column>
           </Column>
         </Box>
       )}
