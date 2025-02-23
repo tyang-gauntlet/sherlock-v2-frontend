@@ -159,6 +159,7 @@ export const ContractAnalyzer: React.FC = () => {
   const [files, setFiles] = useState<File[]>([])
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [fileVersions, setFileVersions] = useState<Record<string, string>>({})
 
   const sortBySeverity = useCallback((a: { severity: string }, b: { severity: string }) => {
     const severityOrder: Record<string, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 }
@@ -187,6 +188,18 @@ export const ContractAnalyzer: React.FC = () => {
     setFiles(droppedFiles)
     setAnalysisResult(null)
     setError(null)
+    setFileVersions({}) // Reset versions when new files are dropped
+
+    // Extract versions from dropped files
+    droppedFiles.forEach(async (file) => {
+      const version = await extractSolidityVersion(file)
+      if (version) {
+        setFileVersions((prev) => ({
+          ...prev,
+          [file.name]: version,
+        }))
+      }
+    })
   }, [])
 
   const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
@@ -197,8 +210,27 @@ export const ContractAnalyzer: React.FC = () => {
       setFiles(selectedFiles)
       setAnalysisResult(null)
       setError(null)
+      setFileVersions({}) // Reset versions when new files are selected
+
+      // Extract versions from new files
+      selectedFiles.forEach(async (file) => {
+        const version = await extractSolidityVersion(file)
+        if (version) {
+          setFileVersions((prev) => ({
+            ...prev,
+            [file.name]: version,
+          }))
+        }
+      })
     }
   }, [])
+
+  const extractSolidityVersion = async (file: File): Promise<string | null> => {
+    const content = await file.text()
+    const versionRegex = /pragma solidity\s+(\^?\d+\.\d+\.\d+|>=?\d+\.\d+\.\d+|<=?\d+\.\d+\.\d+)/
+    const match = content.match(versionRegex)
+    return match ? match[1] : null
+  }
 
   const handleUpload = useCallback(async () => {
     if (files.length === 0) return
@@ -206,21 +238,54 @@ export const ContractAnalyzer: React.FC = () => {
     setIsUploading(true)
     setError(null)
     const formData = new FormData()
-    files.forEach((file) => {
-      formData.append("files", file)
-    })
 
     try {
+      const versions = await Promise.all(files.map(extractSolidityVersion))
+      const validVersions = versions.filter((v): v is string => v !== null)
+
+      if (validVersions.length === 0) {
+        throw new Error(
+          "No valid Solidity version found in any of the files. Please ensure your contracts include a pragma solidity statement."
+        )
+      }
+
+      // Add files and version information to formData
+      files.forEach((file) => {
+        formData.append("files", file)
+      })
+      formData.append("solidity_versions", JSON.stringify(validVersions))
+
       const apiUrl = await getAPIURL()
 
       // Run Slither analysis
       const analysisResponse = await fetch(`${apiUrl}/analyze`, {
         method: "POST",
         body: formData,
+        credentials: "include",
       })
 
       if (!analysisResponse.ok) {
-        throw new Error(`Analysis failed: ${analysisResponse.statusText}`)
+        const errorBody = await analysisResponse.text()
+        let parsedError
+        try {
+          parsedError = JSON.parse(errorBody)
+        } catch {
+          parsedError = { error: errorBody }
+        }
+
+        // Handle specific error cases
+        if (
+          parsedError.error?.includes("solc is not installed") ||
+          parsedError.error?.includes("No solc version set")
+        ) {
+          throw new Error(
+            `Solidity compiler setup required for versions: ${validVersions.join(", ")}. Please contact support.`
+          )
+        }
+
+        throw new Error(
+          `Analysis failed (${analysisResponse.status}): ${parsedError.error || analysisResponse.statusText}`
+        )
       }
 
       const analysisData = await analysisResponse.json()
@@ -273,6 +338,7 @@ export const ContractAnalyzer: React.FC = () => {
           headers: {
             "Content-Type": "application/json",
           },
+          credentials: "include",
           body: JSON.stringify({
             code: fileContents,
           }),
@@ -280,7 +346,6 @@ export const ContractAnalyzer: React.FC = () => {
 
         if (ragResponse.ok) {
           const ragData: AnalysisResult["ragAnalysis"] = await ragResponse.json()
-          // Update UI with RAG results if successful
           setAnalysisResult((prev) =>
             prev
               ? {
@@ -290,7 +355,12 @@ export const ContractAnalyzer: React.FC = () => {
               : null
           )
         } else {
-          console.warn("RAG analysis failed:", ragResponse.statusText)
+          const errorBody = await ragResponse.text()
+          console.warn(
+            `RAG analysis failed (${ragResponse.status}): ${ragResponse.statusText}${
+              errorBody ? ` - ${errorBody}` : ""
+            }`
+          )
         }
       } catch (ragErr) {
         console.warn("RAG analysis error:", ragErr)
@@ -298,7 +368,8 @@ export const ContractAnalyzer: React.FC = () => {
       }
     } catch (err) {
       console.error("Analysis error:", err)
-      setError(err instanceof Error ? err.message : "An error occurred during analysis")
+      let errorMessage = err instanceof Error ? err.message : "An error occurred during analysis"
+      setError(errorMessage)
     } finally {
       setIsUploading(false)
     }
@@ -317,6 +388,21 @@ export const ContractAnalyzer: React.FC = () => {
         return <FaInfoCircle className={styles.unknownSeverity} />
     }
   }, [])
+
+  const getRelevanceClass = (score: number) => {
+    if (score >= 81) return styles.high
+    if (score >= 61) return styles.good
+    if (score >= 41) return styles.moderate
+    if (score >= 21) return styles.low
+    return styles.none
+  }
+
+  const getConfidenceClass = (score: number) => {
+    if (score >= 80) return styles.high
+    if (score >= 60) return styles.good
+    if (score >= 40) return styles.moderate
+    return styles.low
+  }
 
   return (
     <Column spacing="l" className={styles.container}>
@@ -338,7 +424,21 @@ export const ContractAnalyzer: React.FC = () => {
         <Column spacing="m" alignment={["center", "center"]}>
           <FaCloudUploadAlt className={styles.uploadIcon} />
           <Text>Drag and drop Solidity files here or click to select</Text>
-          {files.length > 0 && <Text>Selected files: {files.map((f) => f.name).join(", ")}</Text>}
+          {files.length > 0 && (
+            <Column spacing="s">
+              <Text>Selected files:</Text>
+              {files.map((f) => (
+                <Row key={f.name} spacing="s" alignment={["start", "center"]}>
+                  <Text>{f.name}</Text>
+                  {fileVersions[f.name] && (
+                    <Text size="small" className={styles.versionTag}>
+                      v{fileVersions[f.name]}
+                    </Text>
+                  )}
+                </Row>
+              ))}
+            </Column>
+          )}
         </Column>
       </div>
 
@@ -392,7 +492,6 @@ export const ContractAnalyzer: React.FC = () => {
               {Object.entries(analysisResult.vulnerabilitiesByFile || {}).map(([file, severities]) => (
                 <Box key={file} className={styles.fileResults}>
                   <Column spacing="m">
-                    <Title variant="h4">{file}</Title>
                     {Object.entries(severities).map(
                       ([severity, vulns]) =>
                         vulns.length > 0 && (
@@ -408,9 +507,6 @@ export const ContractAnalyzer: React.FC = () => {
                                     <Text strong>{vuln.check}</Text>
                                   </Row>
                                   <Text>{vuln.description}</Text>
-                                  <Text size="small" className={styles.confidence}>
-                                    Confidence: {vuln.confidence}
-                                  </Text>
                                 </Column>
                               </Box>
                             ))}
@@ -438,50 +534,71 @@ export const ContractAnalyzer: React.FC = () => {
                     {fileAnalysis.analyzed_documents.length > 0 && (
                       <Column spacing="m">
                         <Title variant="h4">Similar Vulnerabilities Found</Title>
-                        {fileAnalysis.analyzed_documents.map((doc, index) => (
-                          <Box key={index} className={styles.vulnerability}>
-                            <Column spacing="s">
-                              <Row spacing="s" alignment={["start", "center"]}>
-                                {renderSeverityIcon(doc.metadata.severity)}
-                                <Column spacing="xs">
-                                  <Text strong>{doc.metadata.category}</Text>
-                                  <Text size="small" className={styles.confidence}>
-                                    Similarity: {(doc.similarity.score * 100).toFixed(1)}% | Relevance:{" "}
-                                    {(doc.evaluation.relevance_score * 100).toFixed(1)}%
-                                  </Text>
-                                </Column>
-                              </Row>
+                        {fileAnalysis.analyzed_documents
+                          .filter((doc) => doc.evaluation.relevance_score > 0)
+                          .map((doc, index) => (
+                            <Box key={index} className={styles.vulnerability}>
+                              <Column spacing="s">
+                                <Row spacing="s" alignment={["start", "center"]}>
+                                  {renderSeverityIcon(doc.metadata.severity)}
+                                  <Column spacing="xs">
+                                    <Text strong>{doc.metadata.category}</Text>
+                                    <Text
+                                      size="small"
+                                      className={`${styles.relevanceScore} ${getRelevanceClass(doc.similarity.score)}`}
+                                    >
+                                      Similarity: {(doc.similarity.score * 100).toFixed(1)}%
+                                    </Text>
+                                  </Column>
+                                </Row>
 
-                              <Text>{doc.evaluation.explanation}</Text>
+                                <Text>{doc.evaluation.explanation}</Text>
 
-                              {doc.evaluation.affected_regions && doc.evaluation.affected_regions.length > 0 && (
-                                <Column spacing="xs">
-                                  <Text size="small" strong>
-                                    Affected Code:
-                                  </Text>
-                                  <div className={styles.codeBlock}>
-                                    <code>{doc.evaluation.affected_regions.join("\n")}</code>
-                                  </div>
-                                </Column>
-                              )}
-
-                              <Box className={styles.vulnMetadata}>
-                                <Column spacing="xs">
-                                  <Text size="small" strong>
-                                    Similar vulnerability found in:
-                                  </Text>
-                                  <Text size="small">{doc.metadata.repo_name}</Text>
-                                  <Text size="small">{doc.metadata.file_path}</Text>
-                                  {doc.content.code_snippet && (
+                                {doc.evaluation.affected_regions && doc.evaluation.affected_regions.length > 0 && (
+                                  <Column spacing="xs">
+                                    <Text size="small" strong>
+                                      Affected Code:
+                                    </Text>
                                     <div className={styles.codeBlock}>
-                                      <code>{doc.content.code_snippet}</code>
+                                      <code>{doc.evaluation.affected_regions.join("\n")}</code>
                                     </div>
-                                  )}
-                                </Column>
-                              </Box>
-                            </Column>
-                          </Box>
-                        ))}
+                                  </Column>
+                                )}
+
+                                <Box className={styles.vulnMetadata}>
+                                  <Column spacing="xs">
+                                    <Text size="small" strong>
+                                      Similar vulnerability found in:
+                                    </Text>
+                                    <Text size="small">{doc.metadata.repo_name}</Text>
+                                    <Text size="small">{doc.metadata.file_path}</Text>
+                                    {doc.content.code_snippet && (
+                                      <div className={styles.codeBlock}>
+                                        <code>{doc.content.code_snippet}</code>
+                                      </div>
+                                    )}
+                                  </Column>
+                                </Box>
+
+                                <Text
+                                  size="small"
+                                  className={`${styles.relevanceScore} ${getRelevanceClass(
+                                    doc.evaluation.relevance_score
+                                  )}`}
+                                >
+                                  Relevance: {doc.evaluation.relevance_score.toFixed(1)}%
+                                </Text>
+                                <Text
+                                  size="small"
+                                  className={`${styles.confidenceScore} ${getConfidenceClass(
+                                    doc.evaluation.confidence
+                                  )}`}
+                                >
+                                  Confidence: {(Number(doc.evaluation.confidence) || 0).toFixed(1)}%
+                                </Text>
+                              </Column>
+                            </Box>
+                          ))}
                       </Column>
                     )}
 

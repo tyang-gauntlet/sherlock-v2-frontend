@@ -32,3 +32,4 @@ logs/
 *.log
 __pycache__/
 *.pyc
+api/venv311/

@@ -1,30 +1,31 @@
-from services.github_repo_manager import GithubRepoManager
-from services.embedding_processor import EmbeddingProcessor
-import os
-import sys
-from dotenv import load_dotenv
-from typing import List, Dict, Tuple, Optional, Any
-import requests
-import tempfile
-import shutil
-import logging
-from multiprocessing import Pool, cpu_count
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from functools import partial
-import tqdm
-import warnings
+from multiprocessing import Pool, cpu_count
+from pathlib import Path
+from typing import List, Dict, Tuple, Optional, Any
+import concurrent.futures
 import hashlib
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
+import logging
 import re
-from services.solidity_analyzer import analyze_solidity_files
-import concurrent.futures
+import shutil
+import tempfile
 import time
-from concurrent.futures import TimeoutError
+import warnings
+from dotenv import load_dotenv
+import requests
+import tqdm
+import os
+import sys
 
 # Add the api directory to the Python path
 api_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(api_dir)
+
+# Now import the services after adding to Python path
+from services.embedding_processor import EmbeddingProcessor
+from services.github_repo_manager import GithubRepoManager
+from services.solidity_analyzer import analyze_solidity_files
 
 # Set tokenizers parallelism to avoid deadlock warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -53,8 +54,12 @@ load_dotenv()
 
 # Constants
 CACHE_DIR = Path(".cache")
-BATCH_SIZE = 50  # Number of files to process in a batch
+BATCH_SIZE = 100  # Increased batch size for better throughput
 MAX_WORKERS = min(32, (cpu_count() * 2))  # Optimal number of workers
+CHUNK_SIZE = 2000  # Reduced chunk size for faster processing
+EMBEDDING_BATCH_SIZE = 50  # Number of items to process in parallel for embeddings
+PROGRESS_FILE = Path("processing_progress.json")
+REPOS_PER_BATCH = 5  # Number of repositories to process in one run
 
 
 def setup_cache():
@@ -287,34 +292,101 @@ def process_chunk_with_timeout(chunk_data: Dict, embedding_processor: EmbeddingP
         return []
 
 
-def process_vulnerability_report(report_data: Dict, solidity_files: List[Dict], embedding_processor: EmbeddingProcessor) -> Tuple[List[Dict], Optional[str]]:
-    """Process a vulnerability report with context from Solidity files"""
+def process_files_batch(files: List[Dict], embedding_processor: EmbeddingProcessor) -> List[Dict]:
+    """Process a batch of files in parallel with improved caching"""
+    embeddings = []
+    cached_files = []
+    uncached_files = []
+
+    # First check cache for all files
+    for file_data in files:
+        cache_key = get_cache_key(file_data['content'])
+        cached_result = load_from_cache(cache_key)
+        if cached_result:
+            embeddings.extend(cached_result)
+            cached_files.append(file_data['file_path'])
+        else:
+            uncached_files.append((cache_key, file_data))
+
+    if cached_files:
+        logger.info(f"Found {len(cached_files)} files in cache")
+
+    if uncached_files:
+        logger.info(f"Processing {len(uncached_files)} uncached files")
+        # Process uncached files in parallel
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            future_to_file = {}
+            for cache_key, file_data in uncached_files:
+                future = executor.submit(
+                    process_single_file, file_data, embedding_processor)
+                future_to_file[future] = (cache_key, file_data)
+
+            for future in as_completed(future_to_file):
+                cache_key, file_data = future_to_file[future]
+                try:
+                    result = future.result()
+                    if result:
+                        embeddings.extend(result)
+                        save_to_cache(cache_key, result)
+                except Exception as e:
+                    logger.error(
+                        f"Error processing {file_data['file_path']}: {str(e)}")
+
+    return embeddings
+
+
+def process_single_file(file_data: Dict, embedding_processor: EmbeddingProcessor) -> List[Dict]:
+    """Process a single file with optimized chunking"""
     try:
-        logger.info(
-            f"Starting to process report: {report_data['report_file']}")
+        # Split content into smaller chunks for faster processing
+        content_chunks = chunk_content(
+            file_data['content'], max_tokens=CHUNK_SIZE)
+        chunk_embeddings = []
+
+        for chunk_idx, chunk in enumerate(content_chunks):
+            chunk_data = {
+                **file_data,
+                'content': chunk,
+                'chunk_index': chunk_idx,
+                'total_chunks': len(content_chunks)
+            }
+
+            # Generate embeddings for the chunk
+            embeddings = embedding_processor.process_solidity_file(chunk_data)
+            if embeddings:
+                chunk_embeddings.extend(embeddings)
+
+        return chunk_embeddings
+    except Exception as e:
+        logger.error(
+            f"Error in process_single_file for {file_data['file_path']}: {str(e)}")
+        return []
+
+
+def process_vulnerability_report(report_data: Dict, solidity_files: List[Dict], embedding_processor: EmbeddingProcessor) -> Tuple[List[Dict], Optional[str]]:
+    """Process a vulnerability report with optimized parallel processing"""
+    try:
         start_time = time.time()
 
         # Extract code references with timeout
-        logger.info("Extracting code references...")
         code_refs = extract_code_references(report_data['content'])
-        logger.info(f"Found {len(code_refs)} code references")
 
-        # Match code references with actual files
-        logger.info("Matching code references with files...")
-        matched_refs = 0
-        for ref in code_refs:
-            for sol_file in solidity_files:
-                if sol_file['file_path'].endswith(ref['file_path']):
-                    ref['actual_file'] = sol_file
-                    matched_refs += 1
-                    break
-        logger.info(f"Matched {matched_refs} code references with files")
+        # Match code references with actual files in parallel
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            futures = []
+            for ref in code_refs:
+                futures.append(executor.submit(
+                    match_code_reference, ref, solidity_files))
 
-        # Split content into smaller chunks with more aggressive size limits
-        logger.info("Splitting content into chunks...")
-        # Reduced chunk size further
-        content_chunks = chunk_content(report_data['content'], max_tokens=1000)
-        logger.info(f"Split content into {len(content_chunks)} chunks")
+            matched_refs = []
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    matched_refs.append(result)
+
+        # Split content into smaller chunks with optimized size
+        content_chunks = chunk_content(
+            report_data['content'], max_tokens=CHUNK_SIZE)
 
         all_embeddings = []
         chunk_futures = []
@@ -323,17 +395,16 @@ def process_vulnerability_report(report_data: Dict, solidity_files: List[Dict], 
         with ThreadPoolExecutor(max_workers=min(4, len(content_chunks))) as chunk_executor:
             for chunk_idx, chunk in enumerate(content_chunks):
                 if time.time() - start_time > 300:  # 5 minute total timeout
-                    logger.error("Total processing timeout exceeded")
-                    return [], "Processing timeout exceeded"
+                    break
 
                 chunk_data = {
                     **report_data,
-                    'content': chunk[:5000],  # Further limit content size
+                    'content': chunk[:CHUNK_SIZE],
                     'chunk_index': chunk_idx,
-                    'total_chunks': len(content_chunks)
+                    'total_chunks': len(content_chunks),
+                    'matched_refs': matched_refs
                 }
 
-                # Submit chunk processing to thread pool
                 future = chunk_executor.submit(
                     process_chunk_with_timeout,
                     chunk_data,
@@ -344,30 +415,12 @@ def process_vulnerability_report(report_data: Dict, solidity_files: List[Dict], 
                 chunk_futures.append(future)
 
             # Process completed chunks as they finish
-            for future in concurrent.futures.as_completed(chunk_futures):
+            for future in as_completed(chunk_futures):
                 try:
-                    chunk_embeddings = future.result(
-                        timeout=120)  # 2 minute timeout per chunk
+                    chunk_embeddings = future.result(timeout=120)
                     if chunk_embeddings:
-                        # Process embeddings metadata
-                        for embedding in chunk_embeddings:
-                            if 'metadata' in embedding:
-                                # Strictly limit metadata size
-                                embedding['metadata'] = truncate_metadata(
-                                    # Even more conservative limit
-                                    embedding['metadata'], max_bytes=10000)
-
-                                # Add minimal file context if available
-                                if 'file_path' in embedding['metadata']:
-                                    for ref in code_refs:
-                                        if ref.get('actual_file') and ref['file_path'] == embedding['metadata']['file_path']:
-                                            # Reduced context size
-                                            context = ref['context'][:500]
-                                            embedding['metadata']['file_context'] = context
-
-                            all_embeddings.append(embedding)
+                        all_embeddings.extend(chunk_embeddings)
                 except TimeoutError:
-                    logger.error("Chunk processing timeout")
                     continue
                 except Exception as e:
                     logger.error(f"Error processing chunk: {str(e)}")
@@ -376,8 +429,6 @@ def process_vulnerability_report(report_data: Dict, solidity_files: List[Dict], 
         if not all_embeddings:
             return [], "No valid embeddings generated"
 
-        logger.info(
-            f"Completed processing report {report_data['report_file']} with {len(all_embeddings)} total embeddings")
         return all_embeddings, None
 
     except Exception as e:
@@ -386,31 +437,23 @@ def process_vulnerability_report(report_data: Dict, solidity_files: List[Dict], 
         return [], error_msg
 
 
-def process_files_batch(files: List[Dict], embedding_processor: EmbeddingProcessor) -> List[Dict]:
-    """Process a batch of files in parallel"""
-    embeddings = []
-
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        future_to_file = {
-            executor.submit(process_solidity_file, file_data, embedding_processor): file_data
-            for file_data in files
-        }
-
-        for future in as_completed(future_to_file):
-            file_data = future_to_file[future]
-            try:
-                result = future.result()
-                if result:
-                    embeddings.extend(result)
-            except Exception as e:
-                logger.error(
-                    f"Error processing {file_data['file_path']}: {str(e)}")
-
-    return embeddings
+def match_code_reference(ref: Dict, solidity_files: List[Dict]) -> Optional[Dict]:
+    """Match a code reference with actual files"""
+    try:
+        for sol_file in solidity_files:
+            if sol_file['file_path'].endswith(ref['file_path']):
+                ref['actual_file'] = sol_file
+                return ref
+    except Exception:
+        return None
+    return None
 
 
 def process_repository_pair(repo_name: str, embedding_processor: EmbeddingProcessor, github_manager: GithubRepoManager) -> None:
     """Process a repository pair with optimized batching and caching"""
+    logger.info(
+        f"\n{'='*80}\nStarting processing of repository: {repo_name}\n{'='*80}")
+
     if embedding_processor.is_repository_processed(repo_name):
         logger.info(f"Repository {repo_name} already processed, skipping...")
         return
@@ -421,6 +464,8 @@ def process_repository_pair(repo_name: str, embedding_processor: EmbeddingProces
         main_repo_url = f"https://github.com/sherlock-audit/{repo_name}"
         main_repo_dir = os.path.join(temp_dir, 'codebase')
         os.makedirs(main_repo_dir, exist_ok=True)
+
+        logger.info(f"Cloning main repository: {main_repo_url}")
 
         main_repo_info = {
             "name": repo_name,
@@ -435,7 +480,11 @@ def process_repository_pair(repo_name: str, embedding_processor: EmbeddingProces
             for item in github_manager.process_repository_content(main_repo_info, main_repo_dir):
                 if item["type"] == "solidity_file":
                     try:
-                        with open(os.path.join(main_repo_dir, item["file_path"]), 'r') as f:
+                        file_path = os.path.join(
+                            main_repo_dir, item["file_path"])
+                        logger.info(
+                            f"Processing Solidity file: {item['file_path']}")
+                        with open(file_path, 'r') as f:
                             content = f.read()
                             solidity_files.append({
                                 "content": content[:50000],  # Limit file size
@@ -449,22 +498,30 @@ def process_repository_pair(repo_name: str, embedding_processor: EmbeddingProces
                         continue
 
             # Process Solidity files in batches
+            total_batches = (len(solidity_files) +
+                             BATCH_SIZE - 1) // BATCH_SIZE
             logger.info(
-                f"Processing {len(solidity_files)} Solidity files in batches")
+                f"Processing {len(solidity_files)} Solidity files in {total_batches} batches")
+
             for i in range(0, len(solidity_files), BATCH_SIZE):
                 batch = solidity_files[i:i + BATCH_SIZE]
+                batch_num = i//BATCH_SIZE + 1
                 try:
                     logger.info(
-                        f"Processing batch {i//BATCH_SIZE + 1}/{(len(solidity_files) + BATCH_SIZE - 1)//BATCH_SIZE}")
+                        f"\nProcessing batch {batch_num}/{total_batches}")
+                    logger.info("Files in this batch:")
+                    for file in batch:
+                        logger.info(f"  - {file['file_path']}")
+
                     embeddings = process_files_batch(
                         batch, embedding_processor)
                     if embeddings:
                         logger.info(
-                            f"Storing {len(embeddings)} embeddings for batch {i//BATCH_SIZE + 1}")
+                            f"Storing {len(embeddings)} embeddings for batch {batch_num}")
                         embedding_processor.store_embeddings(embeddings)
                 except Exception as e:
                     logger.error(
-                        f"Error processing batch {i//BATCH_SIZE + 1}: {str(e)}")
+                        f"Error processing batch {batch_num}: {str(e)}")
                     continue
 
             # Process judging repository
@@ -472,6 +529,9 @@ def process_repository_pair(repo_name: str, embedding_processor: EmbeddingProces
             judging_repo_url = f"https://github.com/sherlock-audit/{judging_repo_name}"
             judging_repo_dir = os.path.join(temp_dir, 'judging')
             os.makedirs(judging_repo_dir, exist_ok=True)
+
+            logger.info(
+                f"\nProcessing judging repository: {judging_repo_name}")
 
             judging_repo_info = {
                 "name": judging_repo_name,
@@ -506,10 +566,8 @@ def process_repository_pair(repo_name: str, embedding_processor: EmbeddingProces
                 logger.info(
                     f"Found {len(vulnerability_reports)} vulnerability reports")
 
-                # Process vulnerability reports with timeout
+                # Process vulnerability reports with timeout and progress tracking
                 with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-                    logger.info(
-                        "Setting up ThreadPoolExecutor for vulnerability reports...")
                     future_to_report = {
                         executor.submit(
                             process_vulnerability_report,
@@ -518,15 +576,13 @@ def process_repository_pair(repo_name: str, embedding_processor: EmbeddingProces
                             embedding_processor
                         ): report for report in vulnerability_reports
                     }
-                    logger.info(
-                        f"Submitted {len(future_to_report)} reports for processing")
 
-                    with tqdm.tqdm(total=len(vulnerability_reports), desc="Processing reports") as pbar:
+                    with tqdm.tqdm(total=len(vulnerability_reports), desc=f"Processing reports for {repo_name}") as pbar:
                         for future in concurrent.futures.as_completed(future_to_report):
                             report = future_to_report[future]
                             try:
                                 logger.info(
-                                    f"Waiting for result of report: {report['report_file']}")
+                                    f"\nProcessing report: {report['report_file']}")
                                 embeddings, error = future.result(
                                     timeout=600)  # 10 minute timeout per report
                                 if error:
@@ -556,7 +612,8 @@ def process_repository_pair(repo_name: str, embedding_processor: EmbeddingProces
             "judging_repo_url": judging_repo_url,
             "processed_files_count": len(solidity_files)
         })
-        logger.info(f"Successfully processed repository pair: {repo_name}")
+        logger.info(
+            f"\n{'='*80}\nSuccessfully completed processing repository: {repo_name}\n{'='*80}")
 
     except Exception as e:
         logger.error(f"Error processing repository {repo_name}: {str(e)}")
@@ -601,8 +658,52 @@ def get_sherlock_repositories() -> List[Dict]:
     return repos
 
 
+def load_progress() -> Dict:
+    """Load processing progress from file"""
+    if PROGRESS_FILE.exists():
+        try:
+            with PROGRESS_FILE.open('r') as f:
+                return json.load(f)
+        except:
+            return {"processed": [], "failed": [], "current_batch": 0}
+    return {"processed": [], "failed": [], "current_batch": 0}
+
+
+def save_progress(progress: Dict):
+    """Save processing progress to file"""
+    with PROGRESS_FILE.open('w') as f:
+        json.dump(progress, f, indent=2)
+
+
+def get_next_batch_repos(all_repos: List[str], progress: Dict) -> List[str]:
+    """Get the next batch of repositories to process"""
+    processed = set(progress["processed"] + progress["failed"])
+    remaining = [repo for repo in all_repos if repo not in processed]
+    return remaining[:REPOS_PER_BATCH]
+
+
 def main():
     """Main function to process repositories"""
+    # Check if just showing progress
+    if len(sys.argv) > 1 and sys.argv[1] == "--show-progress":
+        progress = load_progress()
+        logger.info("\nCurrent Progress:")
+        logger.info(
+            f"Total repositories processed: {len(progress['processed'])}")
+        logger.info(f"Total repositories failed: {len(progress['failed'])}")
+
+        if progress['processed']:
+            logger.info("\nProcessed repositories:")
+            for repo in progress['processed']:
+                logger.info(f"  ✓ {repo}")
+
+        if progress['failed']:
+            logger.info("\nFailed repositories:")
+            for repo in progress['failed']:
+                logger.info(f"  ✗ {repo}")
+
+        return
+
     # Initialize services
     pinecone_api_key = os.getenv('PINECONE_API_KEY')
     github_token = os.getenv('GITHUB_TOKEN')
@@ -620,46 +721,67 @@ def main():
     )
     github_manager = GithubRepoManager(github_token)
 
-    # Process specific repositories if provided
-    if len(sys.argv) > 1:
-        repos_to_process = [repo.replace('-judging', '')
-                            for repo in sys.argv[1:]]
-        repos_to_process = list(set(repos_to_process))  # Remove duplicates
+    # Load progress
+    progress = load_progress()
+    logger.info(
+        f"Loaded progress: {len(progress['processed'])} repositories processed, {len(progress['failed'])} failed")
 
-        for repo_name in repos_to_process:
-            process_repository_pair(
-                repo_name, embedding_processor, github_manager)
+    # Get repositories to process
+    if len(sys.argv) > 1:
+        # Process specific repositories if provided
+        all_repos = [repo.replace('-judging', '') for repo in sys.argv[1:]]
+        all_repos = list(set(all_repos))  # Remove duplicates
     else:
         # Get all repositories
         repos = get_sherlock_repositories()
-        logger.info(f"Found {len(repos)} repositories")
+        all_repos = [repo['name']
+                     for repo in repos if not repo['name'].endswith('-judging')]
+        all_repos = list(set(all_repos))  # Remove duplicates
 
-        processed_repos = set()
-        for repo in repos:
-            if repo['name'].endswith('-judging'):
-                continue
-            base_repo = repo['name']
-            if base_repo not in processed_repos:
-                process_repository_pair(
-                    base_repo, embedding_processor, github_manager)
-                processed_repos.add(base_repo)
+    # Get next batch of repositories
+    batch_repos = get_next_batch_repos(all_repos, progress)
+
+    if not batch_repos:
+        logger.info("No more repositories to process!")
+        return
+
+    logger.info(
+        f"\n{'='*80}\nProcessing batch of {len(batch_repos)} repositories:\n{', '.join(batch_repos)}\n{'='*80}")
+
+    # Process repositories in the current batch
+    for repo_name in batch_repos:
+        try:
+            process_repository_pair(
+                repo_name, embedding_processor, github_manager)
+            progress["processed"].append(repo_name)
+            save_progress(progress)
+        except Exception as e:
+            logger.error(f"Failed to process repository {repo_name}: {str(e)}")
+            progress["failed"].append(repo_name)
+            save_progress(progress)
 
     # Print summary
-    processed_repos = embedding_processor.get_processed_repositories()
-    logger.info("\nProcessing Summary:")
-    logger.info(f"Total repositories processed: {len(processed_repos)}")
+    logger.info("\nBatch Processing Summary:")
+    logger.info(f"Total repositories in this batch: {len(batch_repos)}")
+    logger.info(
+        f"Successfully processed: {len([r for r in batch_repos if r in progress['processed']])}")
+    logger.info(
+        f"Failed to process: {len([r for r in batch_repos if r in progress['failed']])}")
 
-    successful = [r for r in processed_repos if r['status'] == 'completed']
-    failed = [r for r in processed_repos if r['status'] == 'error']
+    # Print overall progress
+    logger.info("\nOverall Progress:")
+    logger.info(
+        f"Total repositories processed so far: {len(progress['processed'])}")
+    logger.info(f"Total repositories failed so far: {len(progress['failed'])}")
+    remaining = len(all_repos) - \
+        len(progress["processed"]) - len(progress["failed"])
+    logger.info(f"Remaining repositories: {remaining}")
 
-    logger.info(f"Successfully processed: {len(successful)}")
-    logger.info(f"Failed to process: {len(failed)}")
-
-    if failed:
-        logger.info("\nFailed repositories:")
-        for repo in failed:
-            logger.info(
-                f"- {repo['repo_name']}: {repo.get('error', 'Unknown error')}")
+    if remaining > 0:
+        logger.info("\nNext batch will process these repositories:")
+        next_batch = get_next_batch_repos(all_repos, progress)
+        for repo in next_batch:
+            logger.info(f"  - {repo}")
 
 
 if __name__ == "__main__":

@@ -502,3 +502,45 @@
   gap: 4px;
   color: #999;
 }
+
+.versionTag {
+  background-color: #e3e8ff;
+  color: #4a5568;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-left: 8px;
+}
+
+.relevanceScore {
+  &.high {
+    color: var(--color-success-dark);
+  }
+  &.good {
+    color: var(--color-success);
+  }
+  &.moderate {
+    color: var(--color-warning);
+  }
+  &.low {
+    color: var(--color-warning-light);
+  }
+  &.none {
+    color: var(--color-text-muted);
+  }
+}
+
+.confidenceScore {
+  &.high {
+    color: var(--color-success);
+  }
+  &.good {
+    color: var(--color-success-light);
+  }
+  &.moderate {
+    color: var(--color-warning);
+  }
+  &.low {
+    color: var(--color-warning-light);
+  }
+}
