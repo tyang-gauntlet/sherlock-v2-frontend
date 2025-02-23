@@ -10,98 +10,122 @@ import { getAPIURL } from "../../../utils/api"
 import styles from "./CodeUploader.module.scss"
 
 type AnalysisResult = {
-  analysis_summary: string
-  analyzed_documents: Array<{
-    document_id: string
-    metadata: {
-      repo_name: string
-      report_file: string
-      file_path: string
-      commit_hash: string
-      timestamp: string
-      type: string
-      category: string
-      severity: string
-      start_line?: number
-      end_line?: number
-      function?: string
-      contract?: string
-    }
-    content: {
-      code_snippet: string
-      context: string
-      description: string
-    }
-    similarity: {
-      score: number
-      vector_id: string
-      embedding_model: string
-      embedding_dimension: number
-    }
-    evaluation: {
-      relevance_score: number
-      explanation: string
-      affected_regions: string[]
-      risk_level: string
-      confidence: number
-    }
+  analysis_details: Array<{
+    file: string
+    status: string
+    vulnerabilities_found: number
   }>
-  batch_statistics: {
-    similarity_stats: {
-      mean: number
-      median: number
-      std_dev: number
-      min: number
-      max: number
-    }
-    relevance_stats: {
-      mean: number
-      median: number
-      std_dev: number
-      min: number
-      max: number
-    }
-    confidence_stats: {
-      mean: number
-      median: number
-      std_dev: number
-      min: number
-      max: number
-    }
-    total_documents_retrieved: number
-    total_documents_analyzed: number
-    risk_level_distribution: {
-      HIGH: number
-      MEDIUM: number
-      LOW: number
-      NONE: number
-    }
-    category_distribution: {
-      [key: string]: {
-        count: number
-        avg_relevance: number
-        avg_similarity: number
+  files: string[]
+  overall_risk_level: string
+  successful_analyses: number
+  total_contracts: number
+  total_files_analyzed: number
+  total_functions: number
+  total_vulnerabilities: number
+  vulnerabilities: Array<{
+    check: string
+    confidence: string
+    description: string
+    elements: Array<{
+      name: string
+      source_mapping: {
+        filename_relative: string
+        lines: number[]
+        start: number
+        length: number
       }
+      type: string
+    }>
+    impact: string
+  }>
+  vulnerabilitiesByFile?: Record<
+    string,
+    Record<
+      string,
+      Array<{
+        check: string
+        confidence: string
+        description: string
+        elements: Array<{
+          name: string
+          source_mapping: {
+            filename_relative: string
+            lines: number[]
+            start: number
+            length: number
+          }
+          type: string
+        }>
+        impact: string
+      }>
+    >
+  >
+  ragAnalysis?: {
+    files: Array<{
+      file_name: string
+      analysis_summary: string
+      analyzed_documents: Array<{
+        document_id: string
+        metadata: {
+          repo_name: string
+          report_file: string
+          file_path: string
+          commit_hash: string
+          timestamp: string
+          type: string
+          category: string
+          severity: string
+          start_line: number
+          end_line: number
+        }
+        content: {
+          code_snippet: string
+          context: string
+          description: string
+        }
+        similarity: {
+          score: number
+          vector_id: string
+          embedding_model: string
+          embedding_dimension: number
+        }
+        evaluation: {
+          relevance_score: number
+          explanation: string
+          affected_regions: string[]
+          risk_level: string
+          confidence: number
+        }
+      }>
+      statistics: {
+        similarity_stats: any
+        relevance_stats: any
+        confidence_stats: any
+        total_documents_retrieved: number
+        total_documents_analyzed: number
+        risk_level_distribution: {
+          HIGH: number
+          MEDIUM: number
+          LOW: number
+          NONE: number
+        }
+        category_distribution: Record<
+          string,
+          {
+            count: number
+            avg_relevance: number
+            avg_similarity: number
+          }
+        >
+      }
+    }>
+    model_info: {
+      embedding_model: string
+      llm_model: string
+      embedding_dimension: number
+      timestamp: string
     }
   }
-  model_info: {
-    embedding_model: string
-    llm_model: string
-    embedding_dimension: number
-    timestamp: string
-  }
-  files?: Array<{
-    file_name: string
-    error?: string
-    vulnerabilities?: Array<{
-      type: string
-      description: string
-      severity: string
-      confidence: string
-      contract?: string
-      function?: string
-    }>
-  }>
 }
 
 type Finding = {
@@ -189,155 +213,96 @@ export const ContractAnalyzer: React.FC = () => {
     try {
       const apiUrl = await getAPIURL()
 
-      // First get the standard Slither analysis
+      // Run Slither analysis
       const analysisResponse = await fetch(`${apiUrl}/analyze`, {
         method: "POST",
         body: formData,
       })
 
       if (!analysisResponse.ok) {
-        throw new Error("Analysis failed")
+        throw new Error(`Analysis failed: ${analysisResponse.statusText}`)
       }
 
       const analysisData = await analysisResponse.json()
 
-      // Prepare RAG analysis for each file
-      const ragPromises = []
+      // Group vulnerabilities by file and severity
+      const vulnerabilitiesByFile = (analysisData.vulnerabilities || []).reduce(
+        (acc: Record<string, Record<string, any[]>>, vuln: any) => {
+          if (!vuln.elements?.[0]?.source_mapping?.filename_relative) {
+            return acc
+          }
 
-      for (const file of files) {
-        const fileContent = await file.text()
+          const file = vuln.elements[0].source_mapping.filename_relative
+          if (!acc[file]) {
+            acc[file] = {
+              HIGH: [],
+              MEDIUM: [],
+              LOW: [],
+              INFORMATIONAL: [],
+            }
+          }
 
-        // Analyze the whole file
-        ragPromises.push(
-          fetch(`${apiUrl}/rag/analyze`, {
-            method: "POST",
-            body: JSON.stringify({
-              code: fileContent,
-              context: `Full file analysis of ${file.name}`,
-              scope: "file",
-            }),
-            headers: {
-              "Content-Type": "application/json",
-              Accept: "application/json",
-            },
-          })
-            .then((res) => {
-              if (!res.ok) {
-                throw new Error(`RAG analysis failed: ${res.statusText}`)
-              }
-              return res.json()
-            })
-            .catch((error) => {
-              console.error("RAG analysis error:", error)
-              return null
-            })
-        )
-      }
+          const impact = vuln.impact?.toUpperCase() || "INFORMATIONAL"
+          if (acc[file][impact]) {
+            acc[file][impact].push(vuln)
+          }
 
-      // Wait for all RAG analyses to complete
-      const ragResults = await Promise.all(ragPromises)
-
-      // Filter out failed results
-      const validResults = ragResults.filter((result) => result !== null)
-
-      if (validResults.length === 0) {
-        throw new Error("All RAG analyses failed")
-      }
-
-      // Combine all analyzed documents
-      const allAnalyzedDocuments = validResults.flatMap((result) => result.analyzed_documents || [])
-
-      // Combine all batch statistics
-      const combinedBatchStats = {
-        similarity_stats: calculateCombinedStats(validResults.map((r) => r.batch_statistics?.similarity_stats)),
-        relevance_stats: calculateCombinedStats(validResults.map((r) => r.batch_statistics?.relevance_stats)),
-        confidence_stats: calculateCombinedStats(validResults.map((r) => r.batch_statistics?.confidence_stats)),
-        total_documents_retrieved: validResults.reduce(
-          (sum, r) => sum + (r.batch_statistics?.total_documents_retrieved || 0),
-          0
-        ),
-        total_documents_analyzed: validResults.reduce(
-          (sum, r) => sum + (r.batch_statistics?.total_documents_analyzed || 0),
-          0
-        ),
-        risk_level_distribution: {
-          HIGH: validResults.reduce((sum, r) => sum + (r.batch_statistics?.risk_level_distribution?.HIGH || 0), 0),
-          MEDIUM: validResults.reduce((sum, r) => sum + (r.batch_statistics?.risk_level_distribution?.MEDIUM || 0), 0),
-          LOW: validResults.reduce((sum, r) => sum + (r.batch_statistics?.risk_level_distribution?.LOW || 0), 0),
-          NONE: validResults.reduce((sum, r) => sum + (r.batch_statistics?.risk_level_distribution?.NONE || 0), 0),
+          return acc
         },
-        category_distribution: combineCategoryDistributions(
-          validResults.map((r) => r.batch_statistics?.category_distribution)
-        ),
-      }
+        {}
+      )
 
-      // Set the analysis result with both Slither and RAG results
+      // Update UI with Slither results first
       setAnalysisResult({
-        analysis_summary: validResults[0]?.analysis_summary || "",
-        analyzed_documents: allAnalyzedDocuments,
-        batch_statistics: combinedBatchStats,
-        model_info: validResults[0]?.model_info || {
-          embedding_model: "sentence-transformers/all-mpnet-base-v2",
-          llm_model: "gpt-4",
-          embedding_dimension: 768,
-          timestamp: new Date().toISOString(),
-        },
-        files: analysisData.files, // Include Slither analysis results
+        ...analysisData,
+        vulnerabilitiesByFile,
       })
-      setFiles([])
-    } catch (error) {
-      setError(error instanceof Error ? error.message : "An error occurred")
-      console.error("Upload error:", error)
+
+      // Try RAG analysis separately
+      try {
+        // Read all files first
+        const fileContents = await Promise.all(
+          files.map(async (file) => ({
+            name: file.name,
+            content: await file.text(),
+          }))
+        )
+
+        const ragResponse = await fetch(`${apiUrl}/rag/analyze`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            code: fileContents,
+          }),
+        })
+
+        if (ragResponse.ok) {
+          const ragData: AnalysisResult["ragAnalysis"] = await ragResponse.json()
+          // Update UI with RAG results if successful
+          setAnalysisResult((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  ragAnalysis: ragData,
+                }
+              : null
+          )
+        } else {
+          console.warn("RAG analysis failed:", ragResponse.statusText)
+        }
+      } catch (ragErr) {
+        console.warn("RAG analysis error:", ragErr)
+        // Continue showing Slither results even if RAG fails
+      }
+    } catch (err) {
+      console.error("Analysis error:", err)
+      setError(err instanceof Error ? err.message : "An error occurred during analysis")
     } finally {
       setIsUploading(false)
     }
   }, [files])
-
-  // Helper function to calculate combined statistics
-  const calculateCombinedStats = (
-    statsArray: Array<{ mean: number; median: number; std_dev: number; min: number; max: number } | undefined>
-  ) => {
-    const validStats = statsArray.filter((s): s is NonNullable<typeof s> => s !== undefined)
-    if (validStats.length === 0) {
-      return { mean: 0, median: 0, std_dev: 0, min: 0, max: 0 }
-    }
-    return {
-      mean: validStats.reduce((sum, s) => sum + s.mean, 0) / validStats.length,
-      median: validStats.reduce((sum, s) => sum + s.median, 0) / validStats.length,
-      std_dev: validStats.reduce((sum, s) => sum + s.std_dev, 0) / validStats.length,
-      min: Math.min(...validStats.map((s) => s.min)),
-      max: Math.max(...validStats.map((s) => s.max)),
-    }
-  }
-
-  // Helper function to combine category distributions
-  const combineCategoryDistributions = (
-    distributions: Array<Record<string, { count: number; avg_relevance: number; avg_similarity: number }> | undefined>
-  ) => {
-    const combined: Record<string, { count: number; avg_relevance: number; avg_similarity: number }> = {}
-
-    distributions.forEach((dist) => {
-      if (!dist) return
-      Object.entries(dist).forEach(([category, stats]) => {
-        if (!combined[category]) {
-          combined[category] = { count: 0, avg_relevance: 0, avg_similarity: 0 }
-        }
-        combined[category].count += stats.count
-        combined[category].avg_relevance += stats.avg_relevance * stats.count
-        combined[category].avg_similarity += stats.avg_similarity * stats.count
-      })
-    })
-
-    // Normalize averages
-    Object.values(combined).forEach((stats) => {
-      if (stats.count > 0) {
-        stats.avg_relevance /= stats.count
-        stats.avg_similarity /= stats.count
-      }
-    })
-
-    return combined
-  }
 
   const renderSeverityIcon = useCallback((severity: string) => {
     const upperSeverity = severity?.toUpperCase() ?? "UNKNOWN"
@@ -354,295 +319,186 @@ export const ContractAnalyzer: React.FC = () => {
   }, [])
 
   return (
-    <Column spacing="xl">
-      <Column spacing="m">
-        <div
-          className={`${styles.dropzone} ${isDragging ? styles.dragging : ""}`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onClick={() => document.getElementById("file-input")?.click()}
-        >
-          <Column spacing="m" alignment="center">
-            <FaCloudUploadAlt size={48} />
-            <Text>Drag and drop Solidity files or click to select</Text>
-            <input
-              id="file-input"
-              type="file"
-              accept=".sol,application/json"
-              multiple
-              onChange={handleFileSelect}
-              className={styles.fileInput}
-            />
-          </Column>
-        </div>
+    <Column spacing="l" className={styles.container}>
+      <div
+        className={`${styles.dropZone} ${isDragging ? styles.dragging : ""}`}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onClick={() => document.getElementById("file-input")?.click()}
+      >
+        <input
+          id="file-input"
+          type="file"
+          multiple
+          accept=".sol"
+          onChange={handleFileSelect}
+          className={styles.fileInput}
+        />
+        <Column spacing="m" alignment={["center", "center"]}>
+          <FaCloudUploadAlt className={styles.uploadIcon} />
+          <Text>Drag and drop Solidity files here or click to select</Text>
+          {files.length > 0 && <Text>Selected files: {files.map((f) => f.name).join(", ")}</Text>}
+        </Column>
+      </div>
 
-        {files.length > 0 && (
-          <Column spacing="m">
-            <Text strong>Selected files:</Text>
-            {files.map((file, index) => (
-              <Text key={index} size="small">
-                {file.name}
-              </Text>
-            ))}
-            <Row>
-              <Button onClick={handleUpload} disabled={isUploading}>
-                {isUploading ? (
-                  <>
-                    <FaSpinner className={styles.spinner} />
-                    Analyzing...
-                  </>
-                ) : (
-                  "Analyze Code"
-                )}
-              </Button>
-            </Row>
-          </Column>
+      <Button disabled={files.length === 0 || isUploading} onClick={handleUpload} className={styles.analyzeButton}>
+        {isUploading ? (
+          <Row spacing="s" alignment={["center", "center"]}>
+            <FaSpinner className={styles.spinner} />
+            <Text>Analyzing...</Text>
+          </Row>
+        ) : (
+          "Analyze Contracts"
         )}
+      </Button>
 
-        {error && (
-          <Box shadow={false}>
-            <Row spacing="s" alignment={["start", "center"]}>
-              <FaExclamationTriangle />
-              <Text>{error}</Text>
-            </Row>
-          </Box>
-        )}
-      </Column>
+      {error && (
+        <Box className={styles.errorBox}>
+          <Row spacing="s" alignment={["start", "center"]}>
+            <FaExclamationTriangle className={styles.errorIcon} />
+            <Text>{error}</Text>
+          </Row>
+        </Box>
+      )}
 
       {analysisResult && (
-        <Box shadow={false} fullWidth>
-          <Column spacing="l">
-            <Title variant="h3">Analysis Results</Title>
-
-            {/* Slither Static Analysis Results */}
+        <Column spacing="l">
+          <Box className={styles.resultsContainer}>
             <Column spacing="m">
-              <Box shadow={false} className={styles.terminalOutput}>
-                {analysisResult.files?.map((file, fileIndex) => (
-                  <Column key={fileIndex} spacing="s">
-                    <Text strong>{file.file_name}</Text>
-                    {file.error ? (
-                      <Text className={styles.error}>{file.error}</Text>
-                    ) : (
-                      <div className={styles.vulnGroups}>
-                        {["HIGH", "MEDIUM", "LOW"].map((severity) => {
-                          const vulnsForSeverity =
-                            file.vulnerabilities?.filter((v) => v.severity.toUpperCase() === severity) || []
+              <Row spacing="s" alignment={["start", "center"]}>
+                <FaCheckCircle className={styles.successIcon} />
+                <Title variant="h4">Analysis Complete</Title>
+              </Row>
 
-                          if (vulnsForSeverity.length === 0) return null
+              <Row className={styles.stats} spacing="l">
+                <Column spacing="xs">
+                  <Text strong>Risk Level</Text>
+                  <Text className={`${styles.riskLevel} ${styles[analysisResult.overall_risk_level.toLowerCase()]}`}>
+                    {analysisResult.overall_risk_level}
+                  </Text>
+                </Column>
+                <Column spacing="xs">
+                  <Text strong>Files Analyzed</Text>
+                  <Text>{analysisResult.total_files_analyzed}</Text>
+                </Column>
+                <Column spacing="xs">
+                  <Text strong>Total Vulnerabilities</Text>
+                  <Text>{analysisResult.total_vulnerabilities}</Text>
+                </Column>
+              </Row>
 
-                          return (
-                            <div key={severity} className={styles.vulnGroup}>
-                              <div className={`${styles.vulnGroupHeader} ${styles[severity.toLowerCase()]}`}>
-                                <span className={styles.vulnCount}>{vulnsForSeverity.length}</span>
-                                <Text strong>{severity}</Text>
-                              </div>
-                              {vulnsForSeverity.map((vuln, vulnIndex) => {
-                                // Extract line numbers from description if present
-                                const lineMatch = vuln.description.match(/\.sol#(\d+-\d+|\d+)/)
-                                const lineInfo = lineMatch ? `#${lineMatch[1]}` : ""
-
-                                // Split description into text and code parts
-                                const codeMatch = vuln.description.match(/"([^"]+)"/)
-                                const code = codeMatch ? codeMatch[1] : ""
-                                const description = vuln.description
-                                  .replace(/\([^)]*\.sol#[^)]*\)/g, "")
-                                  .replace(/"[^"]*"/, "")
-                                  .replace(/\s+/g, " ")
-                                  .trim()
-
-                                return (
-                                  <div key={vulnIndex} className={styles.vulnDetails}>
-                                    <div className={styles.vulnTitle}>
-                                      <div className={styles.vulnTitleMain}>
-                                        <Text strong>{vuln.type}</Text>
-                                        {lineInfo && <span className={styles.lineInfo}>{lineInfo}</span>}
-                                      </div>
-                                      <span className={styles.vulnConfidence}>{vuln.confidence}</span>
-                                    </div>
-                                    <div className={styles.vulnDescription}>{description}</div>
-                                    {code && (
-                                      <div className={styles.codeBlock}>
-                                        <code>{code}</code>
-                                      </div>
-                                    )}
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          )
-                        })}
-                      </div>
+              {/* Render Slither Analysis Results */}
+              {Object.entries(analysisResult.vulnerabilitiesByFile || {}).map(([file, severities]) => (
+                <Box key={file} className={styles.fileResults}>
+                  <Column spacing="m">
+                    <Title variant="h4">{file}</Title>
+                    {Object.entries(severities).map(
+                      ([severity, vulns]) =>
+                        vulns.length > 0 && (
+                          <Column key={severity} spacing="s">
+                            <Text strong className={styles[severity.toLowerCase()]}>
+                              {severity} Severity ({vulns.length})
+                            </Text>
+                            {vulns.map((vuln: any, index: number) => (
+                              <Box key={index} className={styles.vulnerability}>
+                                <Column spacing="xs">
+                                  <Row spacing="s" alignment={["start", "center"]}>
+                                    {renderSeverityIcon(severity)}
+                                    <Text strong>{vuln.check}</Text>
+                                  </Row>
+                                  <Text>{vuln.description}</Text>
+                                  <Text size="small" className={styles.confidence}>
+                                    Confidence: {vuln.confidence}
+                                  </Text>
+                                </Column>
+                              </Box>
+                            ))}
+                          </Column>
+                        )
                     )}
                   </Column>
+                </Box>
+              ))}
+            </Column>
+          </Box>
+
+          {/* Render RAG Analysis Results in a separate section */}
+          {analysisResult.ragAnalysis && (
+            <Box className={styles.resultsContainer}>
+              <Column spacing="m">
+                <Title variant="h4">AI-Powered Analysis</Title>
+                <Text>Based on analysis of similar vulnerabilities in other smart contracts</Text>
+
+                {analysisResult.ragAnalysis.files.map((fileAnalysis, fileIndex) => (
+                  <Column key={fileIndex} spacing="m">
+                    <Title variant="h4">{fileAnalysis.file_name}</Title>
+                    <Text>{fileAnalysis.analysis_summary}</Text>
+
+                    {fileAnalysis.analyzed_documents.length > 0 && (
+                      <Column spacing="m">
+                        <Title variant="h4">Similar Vulnerabilities Found</Title>
+                        {fileAnalysis.analyzed_documents.map((doc, index) => (
+                          <Box key={index} className={styles.vulnerability}>
+                            <Column spacing="s">
+                              <Row spacing="s" alignment={["start", "center"]}>
+                                {renderSeverityIcon(doc.metadata.severity)}
+                                <Column spacing="xs">
+                                  <Text strong>{doc.metadata.category}</Text>
+                                  <Text size="small" className={styles.confidence}>
+                                    Similarity: {(doc.similarity.score * 100).toFixed(1)}% | Relevance:{" "}
+                                    {(doc.evaluation.relevance_score * 100).toFixed(1)}%
+                                  </Text>
+                                </Column>
+                              </Row>
+
+                              <Text>{doc.evaluation.explanation}</Text>
+
+                              {doc.evaluation.affected_regions && doc.evaluation.affected_regions.length > 0 && (
+                                <Column spacing="xs">
+                                  <Text size="small" strong>
+                                    Affected Code:
+                                  </Text>
+                                  <div className={styles.codeBlock}>
+                                    <code>{doc.evaluation.affected_regions.join("\n")}</code>
+                                  </div>
+                                </Column>
+                              )}
+
+                              <Box className={styles.vulnMetadata}>
+                                <Column spacing="xs">
+                                  <Text size="small" strong>
+                                    Similar vulnerability found in:
+                                  </Text>
+                                  <Text size="small">{doc.metadata.repo_name}</Text>
+                                  <Text size="small">{doc.metadata.file_path}</Text>
+                                  {doc.content.code_snippet && (
+                                    <div className={styles.codeBlock}>
+                                      <code>{doc.content.code_snippet}</code>
+                                    </div>
+                                  )}
+                                </Column>
+                              </Box>
+                            </Column>
+                          </Box>
+                        ))}
+                      </Column>
+                    )}
+
+                    <Column spacing="s">
+                      <Title variant="h4">Risk Distribution</Title>
+                      <Row spacing="m">
+                        <Text>High: {fileAnalysis.statistics.risk_level_distribution.HIGH}</Text>
+                        <Text>Medium: {fileAnalysis.statistics.risk_level_distribution.MEDIUM}</Text>
+                        <Text>Low: {fileAnalysis.statistics.risk_level_distribution.LOW}</Text>
+                      </Row>
+                    </Column>
+                  </Column>
                 ))}
-              </Box>
-            </Column>
-
-            {/* RAG Analysis Results */}
-            <Column spacing="m">
-              <Title variant="h4">AI-Powered Analysis</Title>
-              <Box shadow={false} className={styles.terminalOutput}>
-                <Column spacing="m">
-                  {/* Analysis Summary Section */}
-                  <div className={styles.analysisSection}>
-                    <Text strong className={styles.sectionTitle}>
-                      📊 Analysis Summary
-                    </Text>
-                    <div className={styles.analysisSummary}>
-                      <Text>{analysisResult.analysis_summary}</Text>
-                    </div>
-                  </div>
-
-                  {/* Vulnerability Analysis Section */}
-                  <div className={styles.analysisSection}>
-                    <Text strong className={styles.sectionTitle}>
-                      🔍 Detailed Vulnerability Analysis
-                    </Text>
-                    {analysisResult.analyzed_documents
-                      .sort((a, b) => b.evaluation.relevance_score - a.evaluation.relevance_score)
-                      .map((doc, index) => {
-                        const location =
-                          doc.metadata.type === "function"
-                            ? `Function ${doc.metadata.function} in ${doc.metadata.contract}`
-                            : doc.metadata.type === "contract"
-                            ? `Contract ${doc.metadata.contract}`
-                            : `File ${doc.metadata.file_path}`
-
-                        const riskLevelClass = `risk${doc.evaluation.risk_level}`
-
-                        return (
-                          <div key={index} className={styles.vulnAnalysis}>
-                            <div className={`${styles.vulnHeader} ${styles[riskLevelClass]}`}>
-                              <Text strong>📍 {location}</Text>
-                              <span className={styles.riskBadge}>{doc.evaluation.risk_level}</span>
-                            </div>
-                            <div className={styles.vulnContent}>
-                              <div className={styles.codeSnippet}>
-                                <Text className={styles.snippetTitle}>Relevant Code:</Text>
-                                <pre>
-                                  <code>{doc.content.code_snippet}</code>
-                                </pre>
-                              </div>
-                              <div className={styles.vulnDetails}>
-                                <Text className={styles.vulnExplanation}>{doc.evaluation.explanation}</Text>
-                                <div className={styles.vulnMetadata}>
-                                  <div className={styles.metadataItem}>
-                                    <Text strong>Affected Regions:</Text>
-                                    <Text>{doc.evaluation.affected_regions.join(", ")}</Text>
-                                  </div>
-                                  <div className={styles.metadataStats}>
-                                    <span className={styles.statItem}>
-                                      Relevance: {Math.round(doc.evaluation.relevance_score * 100)}%
-                                    </span>
-                                    <span className={styles.statItem}>
-                                      Confidence: {Math.round(doc.evaluation.confidence * 100)}%
-                                    </span>
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      })}
-                  </div>
-
-                  {/* Analysis Statistics Section */}
-                  <div className={styles.analysisSection}>
-                    <Text strong className={styles.sectionTitle}>
-                      📈 Analysis Statistics
-                    </Text>
-                    <div className={styles.statsGrid}>
-                      <div className={styles.statCard}>
-                        <Text strong>Documents Analyzed</Text>
-                        <div className={styles.statValue}>
-                          <Text>{analysisResult.batch_statistics.total_documents_analyzed}</Text>
-                          <Text size="small" className={styles.statLabel}>
-                            out of {analysisResult.batch_statistics.total_documents_retrieved} retrieved
-                          </Text>
-                        </div>
-                      </div>
-
-                      <div className={styles.statCard}>
-                        <Text strong>Risk Distribution</Text>
-                        <div className={styles.riskDistribution}>
-                          <div className={styles.riskBar}>
-                            <div
-                              className={`${styles.riskSegment} ${styles.highRisk}`}
-                              style={{
-                                flex: analysisResult.batch_statistics.risk_level_distribution.HIGH || 0,
-                              }}
-                            >
-                              <Text size="small">
-                                HIGH: {analysisResult.batch_statistics.risk_level_distribution.HIGH || 0}
-                              </Text>
-                            </div>
-                            <div
-                              className={`${styles.riskSegment} ${styles.mediumRisk}`}
-                              style={{
-                                flex: analysisResult.batch_statistics.risk_level_distribution.MEDIUM || 0,
-                              }}
-                            >
-                              <Text size="small">
-                                MED: {analysisResult.batch_statistics.risk_level_distribution.MEDIUM || 0}
-                              </Text>
-                            </div>
-                            <div
-                              className={`${styles.riskSegment} ${styles.lowRisk}`}
-                              style={{
-                                flex: analysisResult.batch_statistics.risk_level_distribution.LOW || 0,
-                              }}
-                            >
-                              <Text size="small">
-                                LOW: {analysisResult.batch_statistics.risk_level_distribution.LOW || 0}
-                              </Text>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className={styles.statCard}>
-                        <Text strong>Similarity Scores</Text>
-                        <div className={styles.scoreStats}>
-                          <div className={styles.scoreStat}>
-                            <Text size="small">
-                              Mean: {(analysisResult.batch_statistics.similarity_stats.mean * 100).toFixed(1)}%
-                            </Text>
-                            <Text size="small">
-                              Median: {(analysisResult.batch_statistics.similarity_stats.median * 100).toFixed(1)}%
-                            </Text>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className={styles.statCard}>
-                        <Text strong>Relevance Scores</Text>
-                        <div className={styles.scoreStats}>
-                          <div className={styles.scoreStat}>
-                            <Text size="small">
-                              Mean: {(analysisResult.batch_statistics.relevance_stats.mean * 100).toFixed(1)}%
-                            </Text>
-                            <Text size="small">
-                              Median: {(analysisResult.batch_statistics.relevance_stats.median * 100).toFixed(1)}%
-                            </Text>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className={styles.modelInfo}>
-                      <Text strong>🤖 Model Information</Text>
-                      <div className={styles.modelDetails}>
-                        <Text size="small">Embedding Model: {analysisResult.model_info.embedding_model}</Text>
-                        <Text size="small">LLM: {analysisResult.model_info.llm_model}</Text>
-                      </div>
-                    </div>
-                  </div>
-                </Column>
-              </Box>
-            </Column>
-          </Column>
-        </Box>
+              </Column>
+            </Box>
+          )}
+        </Column>
       )}
     </Column>
   )

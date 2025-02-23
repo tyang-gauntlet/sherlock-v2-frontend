@@ -63,282 +63,171 @@ def analyze_solidity_files(file_paths: List[str]) -> Dict[str, Any]:
         'total_contracts': 0,
         'total_functions': 0,
         'vulnerabilities': [],
-        'overall_risk_level': 'LOW'
+        'overall_risk_level': 'LOW',
+        'analysis_details': []  # Track analysis progress for each file
     }
 
-    # Check if any files were provided
-    if not file_paths:
-        logging.error("No files provided for analysis")
-        return results
-
-    # Check if solc and slither are installed
     try:
-        # Check solc installation
-        solc_version_cmd = subprocess.run(
-            ['solc', '--version'], capture_output=True, text=True)
-        if solc_version_cmd.returncode != 0:
-            logging.error("solc is not installed or not in PATH")
-            results['error'] = "Solidity compiler (solc) is not properly configured"
+        # Check if any files were provided
+        if not file_paths:
+            logging.error("No files provided for analysis")
+            results['error'] = "No files provided for analysis"
             return results
 
-        # Check slither installation
-        slither_version_cmd = subprocess.run(
-            ['slither', '--version'], capture_output=True, text=True)
-        if slither_version_cmd.returncode != 0:
-            logging.error("slither is not installed or not in PATH")
-            results['error'] = "Slither analyzer is not properly configured"
-            return results
-    except Exception as e:
-        logging.error(f"Error checking tool installation: {str(e)}")
-        results['error'] = "Failed to verify analysis tools installation"
-        return results
-
-    for file_path in file_paths:
-        logging.info(f"\n=== Starting analysis for {file_path} ===")
-        if not file_path.endswith('.sol'):
-            logging.warning(f"Skipping non-Solidity file: {file_path}")
-            continue
-
+        # Check if solc and slither are installed
         try:
-            if not os.path.exists(file_path):
-                logging.error(f"File does not exist: {file_path}")
-                results['files'].append({
-                    'file_name': os.path.basename(file_path),
-                    'error': 'File not found',
-                    'compilation_successful': False
-                })
-                continue
+            # Check solc installation
+            logging.info("Checking solc installation...")
+            solc_version_cmd = subprocess.run(
+                ['solc', '--version'], capture_output=True, text=True)
+            if solc_version_cmd.returncode != 0:
+                error_msg = f"solc is not installed or not in PATH. Error: {solc_version_cmd.stderr}"
+                logging.error(error_msg)
+                results['error'] = error_msg
+                return results
+            logging.info(f"solc version: {solc_version_cmd.stdout.strip()}")
 
-            # Validate the Solidity file
-            is_valid, error_msg = validate_solidity_file(file_path)
-            if not is_valid:
-                logging.error(f"Invalid Solidity file: {error_msg}")
-                results['files'].append({
-                    'file_name': os.path.basename(file_path),
-                    'error': f'Invalid Solidity file: {error_msg}',
-                    'compilation_successful': False
-                })
-                continue
+            # Check slither installation
+            logging.info("Checking slither installation...")
+            slither_version_cmd = subprocess.run(
+                ['slither', '--version'], capture_output=True, text=True)
+            if slither_version_cmd.returncode != 0:
+                error_msg = f"slither is not installed or not in PATH. Error: {slither_version_cmd.stderr}"
+                logging.error(error_msg)
+                results['error'] = error_msg
+                return results
+            logging.info(
+                f"slither version: {slither_version_cmd.stdout.strip()}")
+        except Exception as e:
+            error_msg = f"Error checking tool installation: {str(e)}"
+            logging.error(error_msg)
+            results['error'] = error_msg
+            return results
 
-            # Get solc version from pragma
-            solc_version = '0.8.28'  # Default version
-            with open(file_path, 'r') as f:
-                content = f.read()
-                if 'pragma solidity' in content:
-                    import re
-                    pragma_match = re.search(
-                        r'pragma solidity\s*(\^?\d+\.\d+\.\d+)', content)
-                    if pragma_match:
-                        detected_version = pragma_match.group(
-                            1).replace('^', '')
-                        solc_version = detected_version
-                        logging.info(
-                            f"Detected Solidity version: {solc_version}")
-                else:
-                    logging.warning(
-                        "No solidity pragma found in file, using default version")
-
-            # Set up environment
-            env = os.environ.copy()
-            env['SOLC_VERSION'] = solc_version
-            env['PATH'] = f"/usr/local/bin:/usr/bin:/bin:{env.get('PATH', '')}"
-            env['PYTHONPATH'] = f"/usr/local/lib/python3.12/site-packages:{env.get('PYTHONPATH', '')}"
-
-            # Ensure the solc version is available
+        for file_path in file_paths:
+            file_result = {'file': file_path, 'status': 'pending'}
             try:
-                # Try to install the required solc version if not already installed
-                subprocess.run(
-                    ['solc-select', 'install', solc_version],
-                    capture_output=True,
-                    text=True,
-                    env=env
-                )
-                # Use the required version
-                subprocess.run(
-                    ['solc-select', 'use', solc_version],
-                    capture_output=True,
-                    text=True,
-                    env=env
-                )
-            except Exception as e:
-                logging.error(f"Failed to set up solc version: {str(e)}")
-                # Continue with default version
+                logging.info(f"\n=== Starting analysis for {file_path} ===")
+                file_result['status'] = 'validating'
 
-            # Log environment setup for debugging
-            logging.info(f"Environment PATH: {env['PATH']}")
-            logging.info(f"Environment PYTHONPATH: {env['PYTHONPATH']}")
-            logging.info(f"Using Solidity version: {solc_version}")
-
-            # Run Slither analysis
-            abs_file_path = os.path.abspath(file_path)
-            cmd = ['slither', abs_file_path, '--json',
-                   '-', '--solc-disable-warnings']
-
-            try:
-                # First check if the file can be compiled
-                solc_check = subprocess.run(
-                    ['solc', abs_file_path],
-                    capture_output=True,
-                    text=True,
-                    env=env,
-                    cwd=os.path.dirname(abs_file_path)
-                )
-
-                if solc_check.returncode != 0:
-                    error_msg = f"Solidity compilation failed: {solc_check.stderr}"
+                # Validate file exists
+                if not os.path.exists(file_path):
+                    error_msg = f"File not found: {file_path}"
                     logging.error(error_msg)
-                    results['files'].append({
-                        'file_name': os.path.basename(file_path),
-                        'error': error_msg,
-                        'compilation_successful': False
-                    })
+                    file_result['status'] = 'error'
+                    file_result['error'] = error_msg
+                    results['analysis_details'].append(file_result)
                     continue
 
-                # Run Slither with detailed output
-                process = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    env=env,
-                    cwd=os.path.dirname(abs_file_path),
-                    timeout=300  # 5 minute timeout
-                )
+                if not file_path.endswith('.sol'):
+                    error_msg = f"Skipping non-Solidity file: {file_path}"
+                    logging.warning(error_msg)
+                    file_result['status'] = 'skipped'
+                    file_result['error'] = error_msg
+                    results['analysis_details'].append(file_result)
+                    continue
 
-                # Log both stdout and stderr for debugging
-                logging.info(f"Slither stdout: {process.stdout}")
-                if process.stderr:
-                    logging.error(f"Slither stderr: {process.stderr}")
+                # Validate Solidity file
+                is_valid, validation_error = validate_solidity_file(file_path)
+                if not is_valid:
+                    error_msg = f"Invalid Solidity file {file_path}: {validation_error}"
+                    logging.error(error_msg)
+                    file_result['status'] = 'invalid'
+                    file_result['error'] = error_msg
+                    results['analysis_details'].append(file_result)
+                    continue
 
-                # Try to parse the JSON output first, regardless of return code
-                try:
-                    slither_output = json.loads(process.stdout)
+                # Run Slither analysis
+                file_result['status'] = 'analyzing'
+                cmd = ['slither', file_path, '--json', '-']
+                logging.info(f"Running Slither command: {' '.join(cmd)}")
 
-                    # Check if analysis was successful based on the JSON output
-                    if slither_output.get('success'):
-                        file_result = {
-                            'file_name': os.path.basename(file_path),
-                            'contracts': [],
-                            'vulnerabilities': [],
-                            'compilation_successful': True
-                        }
+                process = subprocess.run(cmd, capture_output=True, text=True)
 
-                        # Extract vulnerabilities from detectors
+                # Log the complete output for debugging
+                logging.info("=== Slither Analysis Output ===")
+                logging.info(f"Return code: {process.returncode}")
+                logging.info(f"Stdout: {process.stdout}")
+                logging.info(f"Stderr: {process.stderr}")
+                logging.info("==============================")
+
+                # Parse Slither output
+                if process.stdout:
+                    try:
+                        slither_output = json.loads(process.stdout)
+                        detectors = []
+
+                        # Extract detectors from results
                         if 'results' in slither_output and 'detectors' in slither_output['results']:
                             for detector in slither_output['results']['detectors']:
-                                # Extract contract and function names
-                                elements = detector.get('elements', [])
-                                contract_name = ''
-                                function_name = ''
-
-                                for element in elements:
-                                    if element.get('type') == 'contract':
-                                        contract_name = element.get('name', '')
-                                    elif element.get('type') == 'function':
-                                        function_name = element.get('name', '')
-                                    elif element.get('type_specific_fields', {}).get('parent', {}).get('type') == 'contract':
-                                        contract_name = element['type_specific_fields']['parent'].get(
-                                            'name', '')
-                                    elif element.get('type_specific_fields', {}).get('parent', {}).get('type') == 'function':
-                                        function_name = element['type_specific_fields']['parent'].get(
-                                            'name', '')
-
-                                impact = detector.get(
-                                    'impact', 'Unknown').capitalize()
-                                confidence = detector.get(
-                                    'confidence', 'Unknown').capitalize()
-
-                                vulnerability = {
-                                    'type': detector.get('check', ''),
-                                    'severity': impact,
-                                    'confidence': confidence,
+                                detector_info = {
+                                    'check': detector.get('check', ''),
+                                    'impact': detector.get('impact', ''),
+                                    'confidence': detector.get('confidence', ''),
                                     'description': detector.get('description', ''),
-                                    'contract': contract_name,
-                                    'function': function_name,
-                                    'markdown': detector.get('markdown', ''),
-                                    'first_markdown_element': detector.get('first_markdown_element', '')
+                                    'elements': detector.get('elements', [])
                                 }
-                                file_result['vulnerabilities'].append(
-                                    vulnerability)
-                                results['vulnerabilities'].append(
-                                    vulnerability)
+                                detectors.append(detector_info)
+                                logging.info(
+                                    f"Found vulnerability: {detector_info['check']} ({detector_info['impact']} impact)")
 
-                        results['files'].append(file_result)
-                        results['total_contracts'] += 1
-                        results['total_functions'] += len(
-                            [v for v in file_result['vulnerabilities'] if v.get('function')])
-
-                        logging.info(f"Successfully analyzed {file_path}")
-                        logging.info(
-                            f"Found {len(file_result['vulnerabilities'])} vulnerabilities")
-                    else:
-                        error_msg = slither_output.get(
-                            'error', 'Unknown error during analysis')
-                        logging.error(f"Slither analysis failed: {error_msg}")
-                        results['files'].append({
-                            'file_name': os.path.basename(file_path),
-                            'error': f'Analysis failed: {error_msg}',
-                            'compilation_successful': False
-                        })
-
-                except json.JSONDecodeError as e:
-                    # Only handle process.returncode if JSON parsing fails
-                    if process.returncode != 0:
-                        error_msg = process.stderr if process.stderr else "Analysis failed without error message"
-                        if "ModuleNotFoundError" in error_msg:
-                            error_msg = "Slither dependencies not properly installed"
-                        elif "SolcError" in error_msg:
-                            error_msg = "Solidity compiler error: " + error_msg
-                        elif "crytic_compile.platform.exceptions" in error_msg:
-                            error_msg = "Contract compilation error: Please check your Solidity code"
-
-                        logging.error(f"Slither analysis failed: {error_msg}")
-                        results['files'].append({
-                            'file_name': os.path.basename(file_path),
-                            'error': f'Analysis failed: {error_msg}',
-                            'compilation_successful': False
-                        })
-                    else:
-                        error_msg = f"Failed to parse Slither output: {str(e)}"
+                            results['vulnerabilities'].extend(detectors)
+                            file_result['status'] = 'success'
+                            file_result['vulnerabilities_found'] = len(
+                                detectors)
+                            logging.info(
+                                f"Successfully analyzed {file_path} - Found {len(detectors)} vulnerabilities")
+                        else:
+                            error_msg = f"No detectors found in Slither output for {file_path}"
+                            logging.error(error_msg)
+                            file_result['status'] = 'failed'
+                            file_result['error'] = error_msg
+                    except json.JSONDecodeError as e:
+                        error_msg = f"Failed to parse Slither output for {file_path}: {str(e)}"
                         logging.error(error_msg)
-                        results['files'].append({
-                            'file_name': os.path.basename(file_path),
-                            'error': error_msg,
-                            'compilation_successful': False
-                        })
+                        file_result['status'] = 'parse_error'
+                        file_result['error'] = error_msg
+                else:
+                    error_msg = f"No output from Slither for {file_path}. Error: {process.stderr}"
+                    logging.error(error_msg)
+                    file_result['status'] = 'failed'
+                    file_result['error'] = error_msg
 
-            except subprocess.TimeoutExpired:
-                error_msg = "Analysis timed out after 5 minutes"
-                logging.error(error_msg)
-                results['files'].append({
-                    'file_name': os.path.basename(file_path),
-                    'error': error_msg,
-                    'compilation_successful': False
-                })
             except Exception as e:
-                error_msg = f"Error running Slither: {str(e)}"
+                error_msg = f"Error processing file {file_path}: {str(e)}"
                 logging.error(error_msg)
-                results['files'].append({
-                    'file_name': os.path.basename(file_path),
-                    'error': error_msg,
-                    'compilation_successful': False
-                })
+                file_result['status'] = 'error'
+                file_result['error'] = error_msg
 
-        except Exception as e:
-            error_msg = f"Exception during analysis: {str(e)}"
-            logging.error(error_msg)
-            logging.exception("Full traceback:")
-            results['files'].append({
-                'file_name': os.path.basename(file_path),
-                'error': error_msg,
-                'compilation_successful': False
-            })
+            results['analysis_details'].append(file_result)
 
-    # Calculate overall risk level
-    if any(v['severity'].upper() == 'HIGH' for v in results['vulnerabilities']):
-        results['overall_risk_level'] = 'HIGH'
-    elif any(v['severity'].upper() == 'MEDIUM' for v in results['vulnerabilities']):
-        results['overall_risk_level'] = 'MEDIUM'
-    elif any(v['severity'].upper() == 'LOW' for v in results['vulnerabilities']):
-        results['overall_risk_level'] = 'LOW'
+        # Calculate overall statistics
+        successful_analyses = [
+            r for r in results['analysis_details'] if r['status'] == 'success']
+        results['total_files_analyzed'] = len(file_paths)
+        results['successful_analyses'] = len(successful_analyses)
+        results['total_vulnerabilities'] = len(results['vulnerabilities'])
 
-    return results
+        # Determine overall risk level based on vulnerability impacts
+        high_impact = any(
+            v['impact'] == 'High' for v in results['vulnerabilities'])
+        medium_impact = any(
+            v['impact'] == 'Medium' for v in results['vulnerabilities'])
+        results['overall_risk_level'] = 'HIGH' if high_impact else (
+            'MEDIUM' if medium_impact else 'LOW')
+
+        logging.info("=== Analysis Summary ===")
+        logging.info(
+            f"Total files analyzed: {results['total_files_analyzed']}")
+        logging.info(f"Successful analyses: {results['successful_analyses']}")
+        logging.info(
+            f"Total vulnerabilities found: {results['total_vulnerabilities']}")
+        logging.info(f"Overall risk level: {results['overall_risk_level']}")
+
+        return results
+
+    except Exception as e:
+        error_msg = f"Unexpected error during analysis: {str(e)}"
+        logging.error(error_msg)
+        results['error'] = error_msg
+        return results

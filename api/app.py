@@ -10,7 +10,7 @@ import shutil
 from sentence_transformers import SentenceTransformer
 from langchain.embeddings.base import Embeddings
 from langchain_community.vectorstores import Pinecone as LangchainPinecone
-from langchain_openai import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from langchain.chains import RetrievalQA, LLMChain
 from langchain.prompts import PromptTemplate
 from langsmith.run_helpers import traceable
@@ -340,133 +340,150 @@ def analyze_with_rag():
             print("Error: No code provided in request")
             return jsonify({'error': 'No code provided'}), 400
 
-        code = data['code']
-        print(f"Analyzing code snippet: {code[:100]}...")
+        code_files = data['code']
+        if not isinstance(code_files, list):
+            print("Error: Code must be an array of files")
+            return jsonify({'error': 'Code must be an array of files'}), 400
 
-        # Get similar vulnerabilities with metadata
-        print("Querying vector store...")
-        results = qa_chain.invoke({"query": code})
-        print(f"RAG Analysis results: {results}")
+        # Process each file
+        all_results = []
+        for code_file in code_files:
+            if not isinstance(code_file, dict) or 'name' not in code_file or 'content' not in code_file:
+                print("Error: Invalid file format")
+                continue
 
-        if not results or not isinstance(results, dict):
-            print(f"Invalid results format: {results}")
-            return jsonify({'error': 'Invalid analysis results'}), 500
+            print(f"Analyzing file {code_file['name']}...")
 
-        # Extract source documents and their metadata
-        source_docs = results.get("source_documents", [])
-        print(f"Found {len(source_docs)} similar documents")
+            # Get similar vulnerabilities with metadata
+            print("Querying vector store...")
+            results = qa_chain.invoke({"query": code_file['content']})
+            print(f"RAG Analysis results: {results}")
 
-        # Process each document individually
-        analyzed_documents = []
-        for doc in source_docs:
-            # Cleanup memory periodically
-            if len(analyzed_documents) % 5 == 0:
-                cleanup_memory()
+            if not results or not isinstance(results, dict):
+                print(f"Invalid results format: {results}")
+                continue
 
-            metadata = doc.metadata
-            if metadata.get('type') == 'vulnerability_code':
-                # Create document analysis object
-                doc_analysis = {
-                    'document_id': metadata.get('id', 'unknown'),
-                    'metadata': {
-                        'repo_name': metadata.get('repo_name'),
-                        'report_file': metadata.get('report_file'),
-                        'file_path': metadata.get('file_path'),
-                        'commit_hash': metadata.get('commit_hash'),
-                        'timestamp': metadata.get('timestamp'),
-                        'type': metadata.get('type'),
+            # Extract source documents and their metadata
+            source_docs = results.get("source_documents", [])
+            print(f"Found {len(source_docs)} similar documents")
+
+            # Process each document individually
+            analyzed_documents = []
+            for doc in source_docs:
+                # Cleanup memory periodically
+                if len(analyzed_documents) % 5 == 0:
+                    cleanup_memory()
+
+                metadata = doc.metadata
+                if metadata.get('type') == 'vulnerability_code':
+                    # Create document analysis object
+                    doc_analysis = {
+                        'document_id': metadata.get('id', 'unknown'),
+                        'metadata': {
+                            'repo_name': metadata.get('repo_name'),
+                            'report_file': metadata.get('report_file'),
+                            'file_path': metadata.get('file_path'),
+                            'commit_hash': metadata.get('commit_hash'),
+                            'timestamp': metadata.get('timestamp'),
+                            'type': metadata.get('type'),
+                            'category': metadata.get('category'),
+                            'severity': metadata.get('severity'),
+                            'start_line': metadata.get('start_line'),
+                            'end_line': metadata.get('end_line')
+                        },
+                        'content': {
+                            'code_snippet': metadata.get('code_snippet', ''),
+                            'context': metadata.get('context', ''),
+                            'description': metadata.get('description', '')
+                        },
+                        'similarity': {
+                            'score': metadata.get('score', 0.0) if isinstance(metadata.get('score'), (int, float)) else 0.0,
+                            'vector_id': metadata.get('vector_id'),
+                            'embedding_model': "sentence-transformers/all-mpnet-base-v2",
+                            'embedding_dimension': 768
+                        }
+                    }
+
+                    # Evaluate relevance
+                    print(
+                        f"Evaluating relevance for document {doc_analysis['document_id']}")
+                    evaluation = evaluate_vulnerability_relevance(code_file['content'], {
                         'category': metadata.get('category'),
-                        'severity': metadata.get('severity'),
-                        'start_line': metadata.get('start_line'),
-                        'end_line': metadata.get('end_line')
-                    },
-                    'content': {
-                        'code_snippet': metadata.get('code_snippet', ''),
                         'context': metadata.get('context', ''),
-                        'description': metadata.get('description', '')
-                    },
-                    'similarity': {
-                        'score': metadata.get('score', 0.0) if isinstance(metadata.get('score'), (int, float)) else 0.0,
-                        'vector_id': metadata.get('vector_id'),
-                        'embedding_model': "sentence-transformers/all-mpnet-base-v2",
-                        'embedding_dimension': 768
+                        'code_snippet': metadata.get('code_snippet', '')
+                    }, llm)
+                    print(f"Relevance evaluation result: {evaluation}")
+
+                    # Add evaluation results
+                    doc_analysis['evaluation'] = {
+                        'relevance_score': evaluation['relevance_score'],
+                        'explanation': evaluation['explanation'],
+                        'affected_regions': evaluation['affected_regions'],
+                        'risk_level': evaluation['risk_level'],
+                        'confidence': evaluation['confidence']
                     }
-                }
 
-                # Evaluate relevance
-                print(
-                    f"Evaluating relevance for document {doc_analysis['document_id']}")
-                evaluation = evaluate_vulnerability_relevance(code, {
-                    'category': metadata.get('category'),
-                    'context': metadata.get('context', ''),
-                    'code_snippet': metadata.get('code_snippet', '')
-                }, llm)
-                print(f"Relevance evaluation result: {evaluation}")
+                    analyzed_documents.append(doc_analysis)
 
-                # Add evaluation results
-                doc_analysis['evaluation'] = {
-                    'relevance_score': evaluation['relevance_score'],
-                    'explanation': evaluation['explanation'],
-                    'affected_regions': evaluation['affected_regions'],
-                    'risk_level': evaluation['risk_level'],
-                    'confidence': evaluation['confidence']
-                }
+            # Sort documents by relevance score
+            analyzed_documents.sort(
+                key=lambda x: x['evaluation']['relevance_score'], reverse=True)
 
-                analyzed_documents.append(doc_analysis)
+            # Calculate statistics for this file
+            similarity_scores = [doc['similarity']['score']
+                                 for doc in analyzed_documents]
+            relevance_scores = [doc['evaluation']['relevance_score']
+                                for doc in analyzed_documents]
+            confidence_scores = [doc['evaluation']['confidence']
+                                 for doc in analyzed_documents]
 
-        # Sort documents by relevance score
-        analyzed_documents.sort(
-            key=lambda x: x['evaluation']['relevance_score'], reverse=True)
+            file_statistics = {
+                'similarity_stats': calculate_similarity_stats(similarity_scores),
+                'relevance_stats': calculate_similarity_stats(relevance_scores),
+                'confidence_stats': calculate_similarity_stats(confidence_scores),
+                'total_documents_retrieved': len(analyzed_documents),
+                'total_documents_analyzed': len(analyzed_documents),
+                'risk_level_distribution': {
+                    'HIGH': len([d for d in analyzed_documents if d['evaluation']['risk_level'] == 'HIGH']),
+                    'MEDIUM': len([d for d in analyzed_documents if d['evaluation']['risk_level'] == 'MEDIUM']),
+                    'LOW': len([d for d in analyzed_documents if d['evaluation']['risk_level'] == 'LOW']),
+                    'NONE': len([d for d in analyzed_documents if d['evaluation']['risk_level'] == 'NONE'])
+                },
+                'category_distribution': {}
+            }
 
-        # Calculate statistics for the batch
-        similarity_scores = [doc['similarity']['score']
-                             for doc in analyzed_documents]
-        relevance_scores = [doc['evaluation']['relevance_score']
-                            for doc in analyzed_documents]
-        confidence_scores = [doc['evaluation']['confidence']
-                             for doc in analyzed_documents]
+            # Calculate category distribution
+            for doc in analyzed_documents:
+                category = doc['metadata']['category']
+                if category:
+                    if category not in file_statistics['category_distribution']:
+                        file_statistics['category_distribution'][category] = {
+                            'count': 0,
+                            'avg_relevance': 0.0,
+                            'avg_similarity': 0.0
+                        }
+                    stats = file_statistics['category_distribution'][category]
+                    stats['count'] += 1
+                    stats['avg_relevance'] += doc['evaluation']['relevance_score']
+                    stats['avg_similarity'] += doc['similarity']['score']
 
-        batch_statistics = {
-            'similarity_stats': calculate_similarity_stats(similarity_scores),
-            'relevance_stats': calculate_similarity_stats(relevance_scores),
-            'confidence_stats': calculate_similarity_stats(confidence_scores),
-            'total_documents_retrieved': len(analyzed_documents),
-            'total_documents_analyzed': len(analyzed_documents),
-            'risk_level_distribution': {
-                'HIGH': len([d for d in analyzed_documents if d['evaluation']['risk_level'] == 'HIGH']),
-                'MEDIUM': len([d for d in analyzed_documents if d['evaluation']['risk_level'] == 'MEDIUM']),
-                'LOW': len([d for d in analyzed_documents if d['evaluation']['risk_level'] == 'LOW']),
-                'NONE': len([d for d in analyzed_documents if d['evaluation']['risk_level'] == 'NONE'])
-            },
-            'category_distribution': {}
-        }
+            # Finalize category averages
+            for category_stats in file_statistics['category_distribution'].values():
+                if category_stats['count'] > 0:
+                    category_stats['avg_relevance'] /= category_stats['count']
+                    category_stats['avg_similarity'] /= category_stats['count']
 
-        # Calculate category distribution
-        for doc in analyzed_documents:
-            category = doc['metadata']['category']
-            if category:
-                if category not in batch_statistics['category_distribution']:
-                    batch_statistics['category_distribution'][category] = {
-                        'count': 0,
-                        'avg_relevance': 0.0,
-                        'avg_similarity': 0.0
-                    }
-                stats = batch_statistics['category_distribution'][category]
-                stats['count'] += 1
-                stats['avg_relevance'] += doc['evaluation']['relevance_score']
-                stats['avg_similarity'] += doc['similarity']['score']
-
-        # Finalize category averages
-        for category_stats in batch_statistics['category_distribution'].values():
-            if category_stats['count'] > 0:
-                category_stats['avg_relevance'] /= category_stats['count']
-                category_stats['avg_similarity'] /= category_stats['count']
+            # Add file results
+            all_results.append({
+                'file_name': code_file['name'],
+                'analysis_summary': results.get('result', ''),
+                'analyzed_documents': analyzed_documents,
+                'statistics': file_statistics
+            })
 
         # Return the enhanced analysis results
         response_data = {
-            'analysis_summary': results.get('result', ''),
-            'analyzed_documents': analyzed_documents,
-            'batch_statistics': batch_statistics,
+            'files': all_results,
             'model_info': {
                 'embedding_model': "sentence-transformers/all-mpnet-base-v2",
                 'llm_model': "gpt-4",
@@ -475,8 +492,7 @@ def analyze_with_rag():
             }
         }
 
-        print(
-            f"Sending response with {len(analyzed_documents)} analyzed documents")
+        print(f"Sending response with {len(all_results)} analyzed files")
         return jsonify(response_data)
 
     except Exception as e:
@@ -500,181 +516,49 @@ def allowed_file(filename):
 
 
 @app.route('/analyze', methods=['POST'])
-def analyze_code():
-    print("Received analyze request")
-
-    # Validate request
-    if 'files' not in request.files and 'github_url' not in request.form:
-        print("No files or GitHub URL provided")
-        return jsonify({'error': 'No files or GitHub URL provided'}), 400
-
-    saved_files = []
-    file_details = []
-    temp_dir = None
-
+def analyze():
+    """Analyze uploaded Solidity files for vulnerabilities."""
     try:
-        if 'files' in request.files:
-            files = request.files.getlist('files')
-            print(f"Received {len(files)} files")
+        # Check if files were uploaded
+        if 'files' not in request.files:
+            return jsonify({'error': 'No files uploaded'}), 400
 
-            if not files or not any(file.filename for file in files):
-                print("No valid files selected")
-                return jsonify({'error': 'No valid files selected'}), 400
+        files = request.files.getlist('files')
+        if not files:
+            return jsonify({'error': 'No files selected'}), 400
 
-            # Create upload directory if it doesn't exist
-            if not os.path.exists(app.config['UPLOAD_FOLDER']):
-                os.makedirs(app.config['UPLOAD_FOLDER'])
+        # Save uploaded files
+        file_paths = []
+        for file in files:
+            if file.filename == '':
+                continue
+            if file and file.filename.endswith('.sol'):
+                filename = secure_filename(file.filename)
+                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                file.save(file_path)
+                file_paths.append(file_path)
 
-            for file in files:
-                if not file or not file.filename:
-                    continue
+        if not file_paths:
+            return jsonify({'error': 'No valid Solidity files uploaded'}), 400
 
-                print(f"Processing file: {file.filename}")
-                if allowed_file(file.filename):
-                    try:
-                        filename = secure_filename(file.filename)
-                        filepath = os.path.join(
-                            app.config['UPLOAD_FOLDER'], filename)
-                        print(f"Saving file to: {filepath}")
-                        file.save(filepath)
+        # Analyze files
+        results = analyze_solidity_files(file_paths)
 
-                        if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                            saved_files.append(filepath)
-                            file_details.append({
-                                'name': filename,
-                                'path': filepath,
-                                'size': os.path.getsize(filepath),
-                                'repo_type': 'uploaded'
-                            })
-                        else:
-                            print(
-                                f"Error: File {filename} was not saved properly")
-                    except Exception as save_error:
-                        print(
-                            f"Error saving file {filename}: {str(save_error)}")
-                else:
-                    print(f"Invalid file type: {file.filename}")
-
-        if not saved_files and 'github_url' not in request.form:
-            print("No valid files processed")
-            return jsonify({
-                'error': 'No valid Solidity files were uploaded. Please upload .sol files only.',
-                'status': 'error'
-            }), 400
-
-        # Process GitHub repository if URL provided
-        if 'github_url' in request.form:
-            github_url = request.form['github_url']
-            print(f"Processing GitHub repository: {github_url}")
-
-            github_token = os.getenv('GITHUB_TOKEN')
-            if not github_token:
-                return jsonify({'error': 'GitHub token not configured'}), 500
-
+        # Clean up uploaded files
+        for file_path in file_paths:
             try:
-                repo_manager = GithubRepoManager(github_token)
-                temp_dir = os.path.join(
-                    app.config['UPLOAD_FOLDER'], 'github_repos')
-                os.makedirs(temp_dir, exist_ok=True)
+                os.remove(file_path)
+            except Exception as e:
+                print(f"Error removing file {file_path}: {e}")
 
-                # Process main repository
-                base_repo_name = github_url.split('/')[-1]
-                base_repo_info = {
-                    "name": base_repo_name,
-                    "clone_url": github_url,
-                    "is_judging": False
-                }
+        # Check if there was an error during analysis
+        if 'error' in results:
+            return jsonify({'error': results['error']}), 500
 
-                base_repo_dir = os.path.join(temp_dir, 'codebase')
-                os.makedirs(base_repo_dir, exist_ok=True)
-
-                if not repo_manager.clone_repository(base_repo_info, base_repo_dir):
-                    return jsonify({'error': 'Failed to clone repository'}), 500
-
-                # Process Solidity files
-                for item in repo_manager.process_repository_content(base_repo_info, base_repo_dir):
-                    if item["type"] == "solidity_file":
-                        relative_path = item["file_path"]
-                        full_path = os.path.join(base_repo_dir, relative_path)
-                        dir_name = os.path.dirname(relative_path)
-
-                        if os.path.exists(full_path) and os.path.getsize(full_path) > 0:
-                            saved_files.append(full_path)
-                            file_details.append({
-                                'name': relative_path,
-                                'path': full_path,
-                                'size': os.path.getsize(full_path),
-                                'repo_type': 'codebase',
-                                'directory': dir_name if dir_name else 'root'
-                            })
-
-            except Exception as github_error:
-                print(
-                    f"Error processing GitHub repository: {str(github_error)}")
-                return jsonify({
-                    'error': f'Failed to process GitHub repository: {str(github_error)}',
-                    'status': 'error'
-                }), 500
-
-        if not saved_files:
-            return jsonify({
-                'error': 'No valid Solidity files found to analyze',
-                'status': 'error'
-            }), 400
-
-        # Perform the analysis
-        try:
-            print("Starting analysis")
-            analysis_results = analyze_solidity_files(saved_files)
-
-            if 'error' in analysis_results:
-                return jsonify({
-                    'error': analysis_results['error'],
-                    'status': 'error'
-                }), 500
-
-            # Add file metadata to results
-            if 'files' not in analysis_results:
-                analysis_results['files'] = []
-            analysis_results['files'].extend(file_details)
-
-            return jsonify(analysis_results), 200
-
-        except Exception as analysis_error:
-            print(f"Analysis error: {str(analysis_error)}")
-            return jsonify({
-                'error': f'Analysis failed: {str(analysis_error)}',
-                'files': file_details,
-                'status': 'error'
-            }), 500
+        return jsonify(results), 200
 
     except Exception as e:
-        print(f"Server error: {str(e)}")
-        return jsonify({
-            'error': f'Server error: {str(e)}',
-            'status': 'error'
-        }), 500
-
-    finally:
-        # Clean up
-        print("Starting cleanup...")
-        for filepath in saved_files:
-            try:
-                if os.path.exists(filepath):
-                    os.remove(filepath)
-                    print(f"Cleaned up file: {filepath}")
-            except Exception as cleanup_error:
-                print(f"Error removing file {filepath}: {str(cleanup_error)}")
-
-        if temp_dir and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-                print(f"Cleaned up temporary directory: {temp_dir}")
-            except Exception as cleanup_error:
-                print(
-                    f"Error removing temporary directory: {str(cleanup_error)}")
-
-        print("Cleanup completed")
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':

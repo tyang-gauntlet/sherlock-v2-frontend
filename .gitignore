@@ -25,3 +25,10 @@ yarn-error.log*
 
 .env
 .vercel
+
+# Add to .gitignore
+api/.cache/
+logs/
+*.log
+__pycache__/
+*.pyc

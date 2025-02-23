@@ -1,23 +1,22 @@
 @import "../../../styles/_variables";
 
-.dropzone {
-  border: 2px dashed rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
-  padding: 20px;
+.container {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.dropZone {
+  border: 2px dashed #333;
+  border-radius: 8px;
+  padding: 2rem;
   text-align: center;
   cursor: pointer;
   transition: border-color 0.3s ease;
-  position: relative;
-  background-color: rgba(255, 255, 255, 0.05);
 
-  &:hover {
-    border-color: rgba(255, 255, 255, 0.4);
-    background-color: rgba(255, 255, 255, 0.1);
-  }
-
+  &:hover,
   &.dragging {
-    border-color: $primary-purple;
-    background-color: rgba(135, 22, 232, 0.1);
+    border-color: #4a9eff;
   }
 }
 
@@ -25,9 +24,99 @@
   display: none;
 }
 
+.uploadIcon {
+  font-size: 2.5rem;
+  color: #4a9eff;
+  margin-bottom: 1rem;
+}
+
+.analyzeButton {
+  margin-top: 1rem;
+  width: 100%;
+  max-width: 300px;
+  align-self: center;
+}
+
 .spinner {
   animation: spin 1s linear infinite;
-  margin-right: 8px;
+}
+
+.errorBox {
+  border: 1px solid #ff3b30;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.errorIcon {
+  color: #ff3b30;
+}
+
+.resultsContainer {
+  margin-top: 2rem;
+  width: 100%;
+}
+
+.successIcon {
+  color: #34c759;
+  font-size: 1.5rem;
+}
+
+.stats {
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 1.5rem;
+  justify-content: space-around;
+}
+
+.riskLevel {
+  font-weight: bold;
+
+  &.high {
+    color: #ff3b30;
+  }
+
+  &.medium {
+    color: #ff9500;
+  }
+
+  &.low {
+    color: #34c759;
+  }
+}
+
+.fileResults {
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-top: 1rem;
+}
+
+.vulnerability {
+  border: 1px solid #333;
+  border-radius: 6px;
+  padding: 1rem;
+  margin-top: 0.5rem;
+}
+
+.confidence {
+  color: #666;
+}
+
+.high {
+  color: #ff3b30;
+}
+
+.medium {
+  color: #ff9500;
+}
+
+.low {
+  color: #34c759;
+}
+
+.informational {
+  color: #666;
 }
 
 @keyframes spin {
@@ -40,90 +129,79 @@
 }
 
 .analysisCard {
-  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid #333;
   border-radius: 4px;
   padding: 16px;
   margin-bottom: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #fff;
 }
 
 .findingCard {
-  background-color: rgba(0, 0, 0, 0.2);
+  border: 1px solid #333;
   border-radius: 4px;
   padding: 12px;
   margin-bottom: 8px;
   border-left: 4px solid transparent;
-  color: #fff;
 
   &.high {
-    border-left-color: $color-error;
+    border-left-color: #ff3b30;
   }
 
   &.medium {
-    border-left-color: $color-warning;
+    border-left-color: #ff9500;
   }
 
   &.low {
-    border-left-color: $color-info;
+    border-left-color: #34c759;
   }
 }
 
 .highSeverity {
-  color: $color-error;
+  color: #ff3b30;
 }
 
 .mediumSeverity {
-  color: $color-warning;
+  color: #ff9500;
 }
 
 .lowSeverity {
-  color: $color-info;
+  color: #34c759;
 }
 
 .unknownSeverity {
-  color: rgba(255, 255, 255, 0.5);
+  color: #666;
 }
 
 .scoreText {
-  color: #fff;
-  background-color: rgba(255, 255, 255, 0.1);
+  border: 1px solid #333;
   padding: 4px 8px;
   border-radius: 4px;
 }
 
 .error {
-  color: $color-error;
-  background-color: rgba(255, 0, 0, 0.1);
+  color: #ff3b30;
+  border: 1px solid #ff3b30;
   padding: 8px;
   border-radius: 4px;
-  border-left: 4px solid $color-error;
 }
 
 .codeSnippet {
   font-family: $font-family-mono;
-  background-color: rgba(0, 0, 0, 0.3);
+  border: 1px solid #333;
   padding: 12px;
   border-radius: 4px;
   white-space: pre-wrap;
-  color: #fff;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  margin: 8px 0;
   line-height: 1.4;
   font-size: 14px;
 }
 
 .terminalOutput {
-  background-color: rgba(0, 0, 0, 0.3);
-  color: #fff;
   font-family: $font-family-mono;
   padding: 16px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid #333;
   line-height: 1.5;
 
   :global(.Text) {
-    color: #fff;
     font-family: $font-family-mono;
   }
 
@@ -140,7 +218,7 @@
 }
 
 .vulnGroup {
-  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid #333;
   border-radius: 8px;
   overflow: hidden;
 }
@@ -150,23 +228,23 @@
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid #333;
 
   &.high {
-    background: rgba(255, 77, 79, 0.15);
+    border-left: 4px solid #ff3b30;
   }
 
   &.medium {
-    background: rgba(250, 173, 20, 0.15);
+    border-left: 4px solid #ff9500;
   }
 
   &.low {
-    background: rgba(24, 144, 255, 0.15);
+    border-left: 4px solid #34c759;
   }
 }
 
 .vulnCount {
-  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid #333;
   color: #fff;
   padding: 2px 8px;
   border-radius: 12px;
@@ -178,7 +256,7 @@
 
 .vulnDetails {
   padding: 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid #333;
 
   &:last-child {
     border-bottom: none;
@@ -200,17 +278,17 @@
 
 .lineInfo {
   font-size: 12px;
-  color: rgba(255, 255, 255, 0.7);
+  color: #999;
   font-family: $font-family-mono;
-  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid #333;
   padding: 1px 6px;
   border-radius: 4px;
 }
 
 .vulnConfidence {
   font-size: 12px;
-  opacity: 0.7;
-  background: rgba(255, 255, 255, 0.1);
+  color: #666;
+  border: 1px solid #333;
   padding: 2px 8px;
   border-radius: 12px;
   text-transform: lowercase;
@@ -219,21 +297,20 @@
 .vulnDescription {
   font-size: 14px;
   line-height: 1.5;
-  color: rgba(255, 255, 255, 0.9);
+  color: #fff;
   margin-bottom: 8px;
 }
 
 .codeBlock {
-  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid #333;
   border-radius: 4px;
   padding: 8px 12px;
   margin-top: 4px;
-  border-left: 2px solid rgba(255, 255, 255, 0.1);
+  border-left: 2px solid #333;
 
   code {
     font-family: $font-family-mono;
     font-size: 13px;
-    color: #e4e4e4;
     white-space: pre;
   }
 }
@@ -250,18 +327,18 @@
   font-size: 18px;
   margin-bottom: 16px;
   padding-bottom: 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid #333;
 }
 
 .analysisSummary {
-  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid #333;
   padding: 16px;
   border-radius: 8px;
   line-height: 1.6;
 }
 
 .vulnAnalysis {
-  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid #333;
   border-radius: 8px;
   margin-bottom: 16px;
   overflow: hidden;
@@ -276,18 +353,18 @@
   justify-content: space-between;
   align-items: center;
   padding: 12px 16px;
-  background: rgba(0, 0, 0, 0.2);
+  border-bottom: 1px solid #333;
 
   &.riskHIGH {
-    background: rgba(255, 77, 79, 0.15);
+    border-left: 4px solid #ff3b30;
   }
 
   &.riskMEDIUM {
-    background: rgba(250, 173, 20, 0.15);
+    border-left: 4px solid #ff9500;
   }
 
   &.riskLOW {
-    background: rgba(24, 144, 255, 0.15);
+    border-left: 4px solid #34c759;
   }
 }
 
@@ -296,8 +373,7 @@
   font-weight: bold;
   padding: 4px 8px;
   border-radius: 12px;
-  background: rgba(0, 0, 0, 0.3);
-  color: #fff;
+  border: 1px solid #333;
 }
 
 .vulnContent {
@@ -307,17 +383,17 @@
 .snippetTitle {
   font-size: 14px;
   margin-bottom: 8px;
-  color: rgba(255, 255, 255, 0.7);
+  color: #999;
 }
 
 .vulnExplanation {
   margin: 16px 0;
   line-height: 1.6;
-  color: rgba(255, 255, 255, 0.9);
+  color: #fff;
 }
 
 .vulnMetadata {
-  background: rgba(0, 0, 0, 0.2);
+  background: #111;
   border-radius: 6px;
   padding: 12px;
 }
@@ -335,11 +411,11 @@
   gap: 16px;
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  border-top: 1px solid #333;
 }
 
 .statItem {
-  background: rgba(255, 255, 255, 0.1);
+  background: #222;
   padding: 4px 8px;
   border-radius: 4px;
   font-size: 12px;
@@ -353,7 +429,7 @@
 }
 
 .statCard {
-  background: rgba(0, 0, 0, 0.2);
+  background: #111;
   border-radius: 8px;
   padding: 16px;
 }
@@ -364,7 +440,7 @@
 }
 
 .statLabel {
-  color: rgba(255, 255, 255, 0.6);
+  color: #666;
   font-size: 12px;
   margin-top: 4px;
 }
@@ -378,7 +454,7 @@
   height: 24px;
   border-radius: 4px;
   overflow: hidden;
-  background: rgba(0, 0, 0, 0.2);
+  background: #111;
 }
 
 .riskSegment {
@@ -390,15 +466,15 @@
   transition: flex 0.3s ease;
 
   &.highRisk {
-    background: rgba(255, 77, 79, 0.3);
+    background: #4d1414;
   }
 
   &.mediumRisk {
-    background: rgba(250, 173, 20, 0.3);
+    background: #4d3614;
   }
 
   &.lowRisk {
-    background: rgba(24, 144, 255, 0.3);
+    background: #143b4d;
   }
 }
 
@@ -413,7 +489,7 @@
 }
 
 .modelInfo {
-  background: rgba(0, 0, 0, 0.2);
+  background: #111;
   border-radius: 8px;
   padding: 16px;
   margin-top: 24px;
@@ -424,5 +500,5 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  color: rgba(255, 255, 255, 0.7);
+  color: #999;
 }
